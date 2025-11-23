@@ -38,7 +38,12 @@ const frontendDist = path.join(__dirname, '../../frontend/dist');
 app.use(express.static(frontendDist));
 
 // Catch-all route - serve index.html for client-side routing
+// IMPORTANT: This must come AFTER all API routes
 app.get('*', (req, res) => {
+  // Don't serve index.html for API routes
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found' });
+  }
   res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
