@@ -196,14 +196,83 @@ async function checkRateLimit(userId: string, operation: string): Promise<boolea
 
 ---
 
-### 3. Credence Granularity
+### 3. Credence Granularity ✅
 **Question:** How fine-grained should the credence scale be? (#4)
 
-**Decision:** [PENDING]
+**Decision:** 3-point scale with Yes/No/Skip plus Rephrase option
 
-**Rationale:** [To be filled]
+**UI Buttons:**
+- 👍 **Thumbs Up** = Agree (credence: 1)
+- 👎 **Thumbs Down** = Disagree (credence: -1)
+- ❌ **X** = Skip/Remove statement (don't include in profile)
+- ✏️ **Rephrase** = Edit statement text inline
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- Simpler than 5-point scale (faster validation)
+- Clear, unambiguous options
+- Mobile-friendly (large touch targets)
+- Rephrase empowers users to refine statements to match their exact thinking
+- Binary agree/disagree is cognitively easier than gradations
+
+**Implementation Notes:**
+
+**Data Model:**
+```typescript
+interface PersonalityStatement {
+  credence: number;  // -1 (disagree), 0 (neutral/skipped), 1 (agree)
+  userValidated: boolean;  // true if user clicked thumbs up/down
+  skipped: boolean;  // true if user clicked X
+}
+```
+
+**Mobile UI (Swipe Mode):**
+```
+┌─────────────────────────────────────┐
+│ Statement: "I prefer working alone" │
+│                                     │
+│  Swipe ← to disagree               │
+│  Swipe → to agree                  │
+│  Tap ❌ to skip                     │
+│  Tap ✏️ to rephrase                │
+│                                     │
+│    👎        ❌  ✏️        👍      │
+└─────────────────────────────────────┘
+```
+
+**Desktop UI:**
+```
+Statement: "I prefer working alone"
+[👎 Disagree]  [❌ Skip]  [✏️ Rephrase]  [👍 Agree]
+```
+
+**Rephrase Flow:**
+1. User clicks ✏️ Rephrase
+2. Statement becomes editable text field
+3. User modifies text
+4. User clicks Save or Cancel
+5. Modified statement automatically marked as user_validated = true
+6. Source changes to 'user_provided'
+
+**Skip vs Remove:**
+- Skip: Statement stays in database but excluded from profile hash/artifacts
+- Can be revisited later in "Skipped Statements" section
+- Useful for "not sure yet" statements
+
+**Database Updates:**
+```sql
+ALTER TABLE personality_statements
+  ADD COLUMN skipped BOOLEAN DEFAULT FALSE;
+
+-- Index for filtering
+CREATE INDEX idx_statements_skipped ON personality_statements(user_id, skipped);
+```
+
+**Benefits:**
+- Faster user validation (3 options vs 5)
+- Clear semantics (yes/no vs "somewhat agree")
+- Rephrase feature makes profile more accurate
+- Skip allows users to defer decisions
+- Works great for swipe gestures on mobile
 
 ---
 
