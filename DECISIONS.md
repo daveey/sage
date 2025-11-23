@@ -220,9 +220,15 @@ async function checkRateLimit(userId: string, operation: string): Promise<boolea
 ```typescript
 interface PersonalityStatement {
   credence: number;  // -1 (disagree), 0 (neutral/skipped), 1 (agree)
+  precision: number;  // 0-1: how confident/certain (0 = very uncertain, 1 = very certain)
   userValidated: boolean;  // true if user clicked thumbs up/down
   skipped: boolean;  // true if user clicked X
 }
+
+// Examples:
+// "I prefer working alone" - credence: 1, precision: 0.95 (strongly agree, very sure)
+// "I like spicy food" - credence: 0.3, precision: 0.4 (weakly agree, not very sure)
+// "I'm a morning person" - credence: -1, precision: 1.0 (strongly disagree, absolutely certain)
 ```
 
 **Mobile UI (Swipe Mode):**
@@ -258,13 +264,97 @@ Statement: "I prefer working alone"
 - Can be revisited later in "Skipped Statements" section
 - Useful for "not sure yet" statements
 
+**Precision UI Flow:**
+After user clicks 👍 or 👎, ask follow-up:
+```
+"How confident are you about this?"
+[Not very sure] [Somewhat sure] [Very sure]
+    0.3             0.6            0.95
+```
+
+Or use slider:
+```
+Certainty: [====|----] 40%
+```
+
+**Default Precision Values:**
+- User-validated (thumbs up/down): 0.8 (reasonably confident)
+- LLM-generated: 0.5 (moderate uncertainty)
+- ChatGPT import: 0.7 (fairly confident)
+- User manually wrote statement: 0.9 (high confidence)
+
 **Database Updates:**
 ```sql
 ALTER TABLE personality_statements
-  ADD COLUMN skipped BOOLEAN DEFAULT FALSE;
+  ADD COLUMN skipped BOOLEAN DEFAULT FALSE,
+  ADD COLUMN precision DECIMAL(3,2) DEFAULT 0.5 CHECK (precision >= 0 AND precision <= 1);
 
--- Index for filtering
+-- Index for filtering high-uncertainty statements
 CREATE INDEX idx_statements_skipped ON personality_statements(user_id, skipped);
+CREATE INDEX idx_statements_uncertainty ON personality_statements(user_id, precision);
+```
+
+**Personality Type Distributions (Also Get Precision):**
+```typescript
+interface PersonalityProfile {
+  mbtiDistribution: {
+    type: MBTIType;
+    probability: number;  // 0-1, must sum to 1.0
+    precision: number;    // 0-1, confidence in this probability
+  }[];
+
+  enneagramDistribution: {
+    type: EnneagramType;
+    probability: number;
+    precision: number;
+  }[];
+
+  big5Scores: {
+    openness: number;          // 0-100
+    openness_precision: number; // 0-1
+    conscientiousness: number;
+    conscientiousness_precision: number;
+    // ... etc for all traits
+  };
+}
+```
+
+**Information-Theoretic Prioritization:**
+```typescript
+// Prioritize statements that reduce most uncertainty
+function getPrioritizedStatements(statements: Statement[]): Statement[] {
+  return statements
+    .filter(s => !s.userValidated && !s.skipped)
+    .sort((a, b) => {
+      // Lower precision = higher uncertainty = higher priority
+      const aUncertainty = 1 - a.precision;
+      const bUncertainty = 1 - b.precision;
+      return bUncertainty - aUncertainty;
+    });
+}
+
+// Measure surprise when user updates a statement
+function calculateSurprise(oldCredence: number, oldPrecision: number,
+                           newCredence: number): number {
+  // High precision + large credence change = high surprise
+  const credenceChange = Math.abs(newCredence - oldCredence);
+  return credenceChange * oldPrecision;
+}
+
+// Suggest statements to review based on uncertainty
+function suggestStatementsToReview(userId: string): Statement[] {
+  // Find statements with low precision that are used in artifacts
+  return db.statements.findMany({
+    where: {
+      userId,
+      precision: { lt: 0.6 },  // Uncertain
+      credence: { not: 0 },     // Has an opinion
+      userValidated: true
+    },
+    orderBy: { precision: 'asc' },  // Lowest precision first
+    take: 5
+  });
+}
 ```
 
 **Benefits:**
@@ -273,6 +363,10 @@ CREATE INDEX idx_statements_skipped ON personality_statements(user_id, skipped);
 - Rephrase feature makes profile more accurate
 - Skip allows users to defer decisions
 - Works great for swipe gestures on mobile
+- **Precision enables uncertainty quantification**
+- **Prioritize reviewing uncertain beliefs**
+- **Measure information gain from new evidence**
+- **Better artifact generation (weight by precision)**
 
 ---
 
