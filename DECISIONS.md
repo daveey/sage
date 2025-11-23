@@ -12,46 +12,187 @@ This document records all decisions made for the personality profiling app. Each
 ### 1. Initial Personality Assessment ✅
 **Question:** How should users initially establish their personality profile?
 
-**Decision:** Multi-path onboarding with 4 options, ChatGPT archive analysis as recommended default
+**Decision:** Multi-path onboarding with 4 options, ChatGPT prompt-based analysis as recommended default
 
 **Paths Offered:**
-1. **"Analyze my conversations" (RECOMMENDED)** - Upload ChatGPT archive or paste conversations
+1. **"Get analysis from ChatGPT" (RECOMMENDED)** - Copy prompt, paste into ChatGPT, paste response back
 2. **"I know my types"** - Manual entry + optional self-description
 3. **"Take conversational assessment"** - LLM-driven adaptive Q&A (5-10 exchanges)
 4. **"Skip for now"** - Start with blank profile, add statements manually
 
 **Rationale:**
-- ChatGPT archive analysis is unique differentiator
-- Real conversational data > questionnaire responses (higher quality)
-- Token budget allows generous LLM usage ($0.50-1.50 per analysis)
+- ChatGPT prompt approach is simplest UX (no file uploads)
+- ChatGPT already has user's conversation history
+- User controls privacy (decides what to share)
+- No cost to us (analysis done in user's ChatGPT)
 - Serves all user types: informed, new, exploratory, privacy-conscious
 - Fast time-to-value: all paths reach first artifact in <10 minutes
 
 **Implementation Notes:**
-- Max upload size: 50MB for ChatGPT archives
-- Privacy: Delete uploaded conversations immediately after analysis (keep only extracted profile)
-- Analysis prompt: Extract MBTI/Enneagram/Big5 + 25-30 personality statements
-- Conversational assessment: Adaptive LLM-driven Q&A (not traditional questionnaire)
-- All paths can be revisited later from profile page
-- Show privacy notice: "Conversations analyzed and deleted immediately"
+
+**Path 1: ChatGPT Prompt Template**
+```
+App shows copyable prompt:
+"Analyze our conversation history and provide my personality profile:
+
+MBTI: [type] (confidence: 0-1)
+Enneagram: [type] (confidence: 0-1)
+Big5: Openness:__, Conscientiousness:__, Extraversion:__, Agreeableness:__, Neuroticism:__ (0-100)
+
+25 Personality Statements with credence (-1 to 1):
+1. [statement] (credence: X.X)
+2. [statement] (credence: X.X)
+..."
+
+User pastes ChatGPT's response → we parse structured output
+```
+
+**Path 2: Manual Entry**
+- User enters known types (MBTI/Enneagram/Big5)
+- Optional: "Tell us about yourself" text box
+- We use LLM to generate 15-20 statements from self-description
+
+**Path 3: Conversational Assessment**
+- Adaptive LLM-driven Q&A (not static questionnaire)
+- 5-10 exchanges based on previous answers
+- Generates profile + statements at end
+
+**Path 4: Skip**
+- Start with blank profile
+- User manually adds statements
+- Can take assessment later from profile page
 
 **Cost Estimate:**
-- Path 1 (Archive): ~$0.50-1.50 per user
+- Path 1 (ChatGPT): $0 (user's ChatGPT does analysis)
 - Path 2 (Manual): ~$0.10-0.30 per user (statement generation)
-- Path 3 (Conversational): ~$0.30-0.60 per user
+- Path 3 (Conversational): ~$0.30-0.60 per user (our LLM)
 - Path 4 (Skip): $0
-- Average: ~$0.50 per user onboarding (acceptable given no budget constraints)
+- Average: ~$0.15 per user onboarding (much cheaper than archive analysis!)
 
 ---
 
-### 2. LLM Provider and Budget
+### 2. LLM Provider and Budget ✅
 **Question:** Which LLM should be primary and what's the budget? (Related: #6, #26, #32)
 
-**Decision:** [PENDING]
+**Decision:** Claude Sonnet 4.5 as primary, with abstraction layer for easy provider swapping
 
-**Rationale:** [To be filled]
+**Provider Strategy:**
+- **Primary:** Claude Sonnet 4.5 (best quality for personality analysis)
+- **Fallback:** GPT-4o (if Claude fails/unavailable)
+- **Architecture:** LLM abstraction layer (easy to swap providers)
+- **User choice:** No (system decides - simpler MVP)
 
-**Implementation Notes:** [To be filled]
+**Usage Limits (Abuse Prevention):**
+- Artifact generation: 20/day per user
+- Statement generation: 10/day per user
+- Conversational assessment: 3/day per user
+- No monthly limits (trust + monitor)
+
+**Cost Budget:**
+- No hard budget limit (willing to spend as needed)
+- Monitor costs via dashboard (no automated alerts for MVP)
+- Target: ~$2-5/user/month average
+- Scale estimate: 1,000 users = ~$2,000-5,000/month
+
+**Rationale:**
+- Claude Sonnet: Superior quality for nuanced personality analysis
+- Abstraction layer: Future-proof (easy to switch to GPT-5, local models, etc.)
+- Generous daily limits prevent abuse but don't restrict legitimate use
+- No budget constraints allows focus on quality over cost
+
+**Implementation Notes:**
+
+**LLM Abstraction Layer:**
+```typescript
+// Abstract interface
+interface LLMProvider {
+  generateCompletion(prompt: string, options?: LLMOptions): Promise<string>;
+  generateStreaming(prompt: string, options?: LLMOptions): AsyncIterator<string>;
+  estimateCost(prompt: string, completion: string): number;
+}
+
+// Implementations
+class ClaudeProvider implements LLMProvider { ... }
+class GPTProvider implements LLMProvider { ... }
+
+// Configuration
+const LLM_CONFIG = {
+  primary: 'claude-sonnet-4.5',
+  fallback: 'gpt-4o',
+  providers: {
+    'claude-sonnet-4.5': new ClaudeProvider(),
+    'gpt-4o': new GPTProvider(),
+  }
+};
+
+// Usage
+const llm = LLM_CONFIG.providers[LLM_CONFIG.primary];
+```
+
+**Task-Specific Provider Selection:**
+```typescript
+const LLM_STRATEGY = {
+  profileAnalysis: 'claude-sonnet-4.5',
+  statementGeneration: 'claude-sonnet-4.5',
+  conversationalAssessment: 'claude-sonnet-4.5',
+  artifactGeneration: 'claude-sonnet-4.5',
+  // Easy to change per-task if needed
+};
+```
+
+**Fallback Strategy:**
+```typescript
+async function generateWithFallback(prompt: string): Promise<string> {
+  try {
+    return await llm.primary.generateCompletion(prompt);
+  } catch (error) {
+    logger.warn('Primary LLM failed, using fallback', { error });
+    return await llm.fallback.generateCompletion(prompt);
+  }
+}
+```
+
+**Cost Tracking:**
+```sql
+-- Track LLM usage for monitoring
+CREATE TABLE llm_usage (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users(id),
+  operation VARCHAR(50), -- 'artifact', 'statement', 'assessment'
+  provider VARCHAR(50),  -- 'claude-sonnet-4.5', 'gpt-4o'
+  tokens_input INTEGER,
+  tokens_output INTEGER,
+  cost_usd DECIMAL(10,6),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_llm_usage_user_date ON llm_usage(user_id, created_at);
+CREATE INDEX idx_llm_usage_date ON llm_usage(created_at);
+```
+
+**Daily Limits Implementation:**
+```typescript
+// Rate limiting per user per day
+const DAILY_LIMITS = {
+  artifactGeneration: 20,
+  statementGeneration: 10,
+  conversationalAssessment: 3,
+};
+
+// Check before each operation
+async function checkRateLimit(userId: string, operation: string): Promise<boolean> {
+  const today = startOfDay(new Date());
+  const count = await db.llm_usage.count({
+    where: {
+      user_id: userId,
+      operation: operation,
+      created_at: { gte: today }
+    }
+  });
+
+  return count < DAILY_LIMITS[operation];
+}
+```
 
 ---
 
