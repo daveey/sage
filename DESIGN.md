@@ -7,42 +7,40 @@ A web-based application that builds and maintains detailed personality profiles 
 ### Core Value Proposition
 Users receive highly personalized content by maintaining a living personality profile that combines established psychological frameworks (MBTI, Enneagram, Big5) with dynamic, user-validated statements about their preferences, behaviors, and traits.
 
-### Design Decisions Status
-This design incorporates **48 decisions** across critical, high-priority, medium-priority, and deferred categories:
+### Design Decisions Status - SIMPLIFIED FOR MVP
 
-**Critical Decisions (1-9):**
-1. ✅ Multi-path onboarding (ChatGPT prompt recommended)
-2. ✅ Claude Sonnet 4.5 with LLM abstraction layer
-3. ✅ Binary credence + precision + emphasis features
-4. ✅ Fingerprint-based caching with deviation detection
-5. ✅ Integrated profile hash algorithm
-6. ✅ 8hr access / 30day refresh JWT tokens
-7. ✅ Shareable artifacts with opaque links
-8. ✅ Generous validation limits (500 char statements, 1000 artifacts max)
-9. ✅ Probability distribution normalization
+This design has been **simplified based on architecture critique** to enable faster MVP validation. Key simplifications:
 
-**High-Priority Decisions (10-15):**
-10. ✅ Custom prompts (V1: templates, V2+: custom with sanitization)
-11. ✅ User-triggered statement generation only
-12. ✅ LLM cost quotas (20/10/3 daily limits, no global cap)
-13. ✅ Soft delete for users (30-day recovery), hard delete for artifacts
-14. ✅ LLM response validation (length + format + retry)
-15. ✅ Specific error messages with appropriate UI patterns
+**✂️ Removed from V1 (Deferred to V2):**
+- ❌ Precision/emphasis/skipped on statements → **Simple binary agree/disagree**
+- ❌ Fingerprint-based caching with deviation → **Simple cache invalidation on change**
+- ❌ ChatGPT import path → **Manual entry only**
+- ❌ Big5 personality framework → **MBTI + Enneagram only**
+- ❌ Share links for artifacts → **Private only**
+- ❌ Soft delete with recovery → **Hard delete**
+- ❌ Information-theoretic prioritization → **Random order**
+- ❌ Diff-aware LLM prompting → **Full regeneration**
+- ❌ Multi-device session management → **Single session**
 
-**Medium-Priority Decisions (16-23):**
-16. ✅ Manual profile re-evaluation only (no auto-updates)
-17. ✅ No statement deduplication for MVP
-18. ✅ Single artifact version (no history for MVP)
-19. ✅ LLM-inferred Big5 + user-adjustable sliders
-20. ✅ Database transactions for critical operations
-21. ✅ Basic monitoring (logs + metrics, no alerts for MVP)
-22. ✅ Daily backups via Railway PostgreSQL
-23. ✅ Vitest unit tests (<1s), run on every change
+**✅ V1 Core (True MVP - 1 week):**
+1. Simple personality profile (MBTI + Enneagram distributions)
+2. Statement validation (binary agree/disagree only)
+3. Artifact generation (5 predefined templates)
+4. Basic caching (invalidate on any profile change)
+5. Google OAuth with 15-min JWT tokens
+6. Normalized database schema (PostgreSQL tables, not JSONB)
+7. Fast unit tests (<1s with Vitest)
+8. Hard delete only (no soft delete complexity)
 
-**Deferred Decisions (24-48):**
-Mobile patterns, UI polish, monetization, analytics, accessibility, real-time updates, email notifications, API versioning, and other enhancements deferred to post-MVP with sensible defaults.
+**✅ V2 Additions (After MVP Validation):**
+- Precision/emphasis on statements
+- Fingerprint-based smart caching
+- Big5 support with sliders
+- Share links for artifacts
+- Soft delete with recovery
+- Advanced features from original design
 
-**See MILESTONES.md for phased development plan (V1: single-user, V2: multi-user, V3: advanced, V4: production).**
+**See MILESTONES.md for phased development plan.**
 
 ## 2. System Architecture
 
@@ -126,41 +124,39 @@ interface User {
 }
 ```
 
-### 3.2 Personality Profile Model
+### 3.2 Personality Profile Model (SIMPLIFIED for V1)
 
 ```typescript
 interface PersonalityProfile {
   id: string;
   userId: string;
+  version: number;  // For optimistic locking
 
-  // Probability distributions (DECISION #9: Must sum to 1.0)
-  mbtiDistribution: {
-    type: MBTIType;        // e.g., "INTJ"
-    probability: number;   // 0-1 (renamed from confidence)
-    precision: number;     // 0-1: confidence in this probability (DECISION #3)
-  }[];
-
-  enneagramDistribution: {
-    type: EnneagramType;    // 1-9, with optional wing
-    probability: number;    // 0-1
-    precision: number;      // 0-1
-  }[];
-
-  big5Scores: {
-    openness: number;          // 0-100
-    openness_precision: number;  // 0-1 (DECISION #3)
-    conscientiousness: number;
-    conscientiousness_precision: number;
-    extraversion: number;
-    extraversion_precision: number;
-    agreeableness: number;
-    agreeableness_precision: number;
-    neuroticism: number;
-    neuroticism_precision: number;
-  };
+  // V1: Simple - No precision, no Big5
+  // Distributions stored in separate tables (normalized schema)
 
   updatedAt: Date;
+  createdAt: Date;
 }
+
+// Separate table for MBTI (normalized, queryable)
+interface PersonalityProfileMBTI {
+  profileId: string;
+  type: MBTIType;
+  probability: number;  // 0-1, must sum to 1.0 for profile
+  PRIMARY KEY (profileId, type);
+}
+
+// Separate table for Enneagram (normalized, queryable)
+interface PersonalityProfileEnneagram {
+  profileId: string;
+  type: EnneagramType;
+  probability: number;  // 0-1, must sum to 1.0 for profile
+  PRIMARY KEY (profileId, type);
+}
+
+// V2+: Add precision column to both tables
+// V2+: Add Big5 support with separate table
 
 type MBTIType =
   | "INTJ" | "INTP" | "ENTJ" | "ENTP"
@@ -172,23 +168,27 @@ type EnneagramType = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
   | "1w2" | "1w9" | "2w1" | "2w3" | ... ; // with wings
 ```
 
-### 3.3 Statement Model
+### 3.3 Statement Model (SIMPLIFIED for V1)
 
 ```typescript
 interface PersonalityStatement {
   id: string;
   userId: string;
-  statement: string;           // The actual statement text (max 500 chars - DECISION #8)
-  credence: number;            // -1 (disagree), 0 (neutral/skipped), 1 (agree) - DECISION #3
-  precision: number;           // 0-1: confidence/certainty in this credence - DECISION #3
-  emphasized: boolean;         // True if user marked as core belief (2x weight) - DECISION #3
+  statement: string;        // Max 500 chars
+  credence: number;         // V1: -1 (disagree), 0 (not validated), 1 (agree)
+                            // V2+: Add precision, emphasis, skipped
   category?: StatementCategory;
-  source: StatementSource;     // How was this statement generated?
-  userValidated: boolean;      // Has user explicitly agreed/disagreed?
-  skipped: boolean;            // True if user clicked X (skip) - DECISION #3
+  source: StatementSource;
+  userValidated: boolean;   // Has user clicked agree/disagree?
   createdAt: Date;
   updatedAt: Date;
 }
+
+// V1 Simplifications:
+// - No precision field (defer to V2)
+// - No emphasized field (defer to V2)
+// - No skipped field (just leave credence=0)
+// - Binary: User either agrees (1), disagrees (-1), or hasn't validated (0)
 
 enum StatementCategory {
   WORK_STYLE = "work_style",
@@ -209,7 +209,7 @@ enum StatementSource {
 }
 ```
 
-### 3.4 Artifact Model
+### 3.4 Artifact Model (SIMPLIFIED for V1)
 
 ```typescript
 interface Artifact {
@@ -217,26 +217,22 @@ interface Artifact {
   userId: string;
   type: ArtifactType;
   title: string;
-  content: string;              // Markdown or HTML
-  prompt: string;               // The prompt used to generate (max 1000 chars - DECISION #8)
+  content: string;              // Markdown
+  prompt: string;               // The template used (predefined only for V1)
 
-  // DECISION #4: Fingerprint-based caching
-  personalityFingerprint: PersonalityFingerprint;  // Snapshot at generation time
-  deviationScore: number;       // 0-1: Current deviation from fingerprint
-  needsRegeneration: boolean;   // True if deviation > threshold
-  statementsUsed: string[];     // IDs of statements used in generation
-
-  generatedBy: "claude-sonnet-4.5" | "gpt-4o";  // DECISION #2
-  cachedAt: Date;
-
-  // DECISION #7: Shareable artifacts
-  shareId: string;              // Unique 8-char opaque ID for sharing
-  isPublic: boolean;            // Privacy toggle
-  shareViewCount: number;       // Views via share link
-
-  viewCount: number;            // Total views (owner + share)
-  lastViewedAt?: Date;
+  generatedBy: "claude-sonnet-4.5" | "gpt-4o";
+  createdAt: Date;
+  updatedAt: Date;
 }
+
+// V1 Simplifications:
+// - No fingerprints (simple cache invalidation: regenerate when profile changes)
+// - No deviation detection (always show "Profile may have changed" if updatedAt > createdAt)
+// - No share links (artifacts are private only)
+// - No view counts
+// - Cache key: artifact:{userId}:{type}:latest (invalidate on profile change)
+
+// V2+: Add back fingerprints, share links, deviation detection
 
 // DECISION #4: Personality fingerprint for deviation detection
 interface PersonalityFingerprint {
@@ -279,7 +275,7 @@ enum ArtifactType {
 }
 ```
 
-### 3.5 Database Schema (PostgreSQL)
+### 3.5 Database Schema (PostgreSQL) - SIMPLIFIED & NORMALIZED
 
 ```sql
 -- Users table
@@ -293,26 +289,41 @@ CREATE TABLE users (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Personality profiles table
+-- Personality profiles table (V1: Simple, no JSONB)
 CREATE TABLE personality_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  mbti_distribution JSONB NOT NULL,
-  enneagram_distribution JSONB NOT NULL,
-  big5_scores JSONB NOT NULL,
+  version INTEGER DEFAULT 1,  -- For optimistic locking
+  created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(user_id)
 );
 
--- Personality statements table (DECISION #3: added precision, emphasized, skipped)
+-- MBTI distribution (Normalized - queryable!)
+CREATE TABLE personality_profile_mbti (
+  profile_id UUID REFERENCES personality_profiles(id) ON DELETE CASCADE,
+  type VARCHAR(4) NOT NULL CHECK (type IN ('INTJ','INTP','ENTJ','ENTP','INFJ','INFP','ENFJ','ENFP','ISTJ','ISFJ','ESTJ','ESFJ','ISTP','ISFP','ESTP','ESFP')),
+  probability DECIMAL(3,2) NOT NULL CHECK (probability >= 0 AND probability <= 1),
+  PRIMARY KEY (profile_id, type)
+);
+
+-- Enneagram distribution (Normalized - queryable!)
+CREATE TABLE personality_profile_enneagram (
+  profile_id UUID REFERENCES personality_profiles(id) ON DELETE CASCADE,
+  type VARCHAR(10) NOT NULL,  -- "1", "2", "1w2", etc.
+  probability DECIMAL(3,2) NOT NULL CHECK (probability >= 0 AND probability <= 1),
+  PRIMARY KEY (profile_id, type)
+);
+
+-- V2+: Add precision column to both tables above
+-- V2+: Add personality_profile_big5 table
+
+-- Personality statements table (V1: Simplified - no precision, emphasized, skipped)
 CREATE TABLE personality_statements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  statement TEXT NOT NULL CHECK (length(statement) <= 500),  -- DECISION #8
-  credence DECIMAL(3,2) NOT NULL CHECK (credence >= -1 AND credence <= 1),
-  precision DECIMAL(3,2) DEFAULT 0.5 CHECK (precision >= 0 AND precision <= 1),  -- DECISION #3
-  emphasized BOOLEAN DEFAULT FALSE,  -- DECISION #3
-  skipped BOOLEAN DEFAULT FALSE,  -- DECISION #3
+  statement TEXT NOT NULL CHECK (length(statement) <= 500 AND length(statement) >= 10),
+  credence SMALLINT NOT NULL CHECK (credence IN (-1, 0, 1)),  -- Binary for V1
   category VARCHAR(50),
   source VARCHAR(50) NOT NULL,
   user_validated BOOLEAN DEFAULT FALSE,
@@ -321,43 +332,27 @@ CREATE TABLE personality_statements (
 );
 
 CREATE INDEX idx_statements_user_id ON personality_statements(user_id);
-CREATE INDEX idx_statements_category ON personality_statements(category);
-CREATE INDEX idx_statements_uncertainty ON personality_statements(user_id, precision);  -- DECISION #3: for prioritization
-CREATE INDEX idx_statements_emphasized ON personality_statements(user_id, emphasized) WHERE emphasized = TRUE;
+CREATE INDEX idx_statements_validated ON personality_statements(user_id, user_validated) WHERE user_validated = TRUE;
 
--- Artifacts table (DECISION #4: fingerprints, DECISION #7: sharing)
+-- Artifacts table (V1: Simplified - no fingerprints, no sharing)
 CREATE TABLE artifacts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   type VARCHAR(50) NOT NULL,
   title VARCHAR(255) NOT NULL,
   content TEXT NOT NULL,
-  prompt TEXT NOT NULL CHECK (length(prompt) <= 1000),  -- DECISION #8
-
-  -- DECISION #4: Fingerprint-based caching
-  personality_fingerprint JSONB NOT NULL,
-  deviation_score DECIMAL(3,2) DEFAULT 0,
-  needs_regeneration BOOLEAN DEFAULT FALSE,
-  statements_used JSONB NOT NULL,
-
+  prompt TEXT NOT NULL,  -- Predefined template name for V1
   generated_by VARCHAR(20) NOT NULL,
-  cached_at TIMESTAMP DEFAULT NOW(),
-
-  -- DECISION #7: Shareable artifacts
-  share_id VARCHAR(8) UNIQUE NOT NULL,
-  is_public BOOLEAN DEFAULT FALSE,
-  share_view_count INTEGER DEFAULT 0,
-
-  view_count INTEGER DEFAULT 0,
-  last_viewed_at TIMESTAMP
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, type)  -- One artifact per type per user (overwrite on regenerate)
 );
 
 CREATE INDEX idx_artifacts_user_id ON artifacts(user_id);
-CREATE INDEX idx_artifacts_type ON artifacts(type);
-CREATE INDEX idx_artifacts_share_id ON artifacts(share_id);  -- DECISION #7
-CREATE INDEX idx_artifacts_outdated ON artifacts(user_id, deviation_score DESC) WHERE needs_regeneration = TRUE;  -- DECISION #4
 
--- Refresh tokens table (DECISION #6: 8hr access / 30day refresh with rotation)
+-- V2+: Add share_id, is_public, personality_fingerprint, deviation_score
+
+-- Refresh tokens table (V1: 15min access / 30day refresh with rotation)
 CREATE TABLE refresh_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -365,14 +360,14 @@ CREATE TABLE refresh_tokens (
   expires_at TIMESTAMP NOT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
   last_used_at TIMESTAMP,
-  revoked BOOLEAN DEFAULT FALSE,
-  user_agent TEXT,
-  ip_address INET
+  revoked BOOLEAN DEFAULT FALSE
 );
 
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
 CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+
+-- V1 Simplification: No user_agent or ip_address tracking (defer to V2)
 
 -- LLM usage tracking (DECISION #2: Monitor costs)
 CREATE TABLE llm_usage (
@@ -403,145 +398,130 @@ CREATE INDEX idx_llm_usage_operation ON llm_usage(operation);
 6. Server creates session (JWT or session cookie)
 7. User redirected to dashboard
 
-### 4.2 Initial Personality Assessment (DECISION #1: Multi-path onboarding)
+### 4.2 Initial Personality Assessment (SIMPLIFIED for V1)
 
-**User selects from 4 onboarding paths:**
+**V1: Single simple path (no ChatGPT integration complexity)**
 
-**Path 1: "Get analysis from ChatGPT" (RECOMMENDED)**
-1. User sees copyable prompt template
-2. User pastes prompt into ChatGPT, gets structured response
-3. User pastes ChatGPT response back into app
-4. App parses response → extracts MBTI, Enneagram, Big5, statements
-5. User reviews and validates 20-25 imported statements (👍/👎/❌/✏️)
+**Onboarding Flow:**
+1. User signs in with Google
+2. **"Tell us about yourself"** page:
+   - User manually enters MBTI type (dropdown)
+   - User manually enters Enneagram type (dropdown)
+   - Optional: User provides self-description (500 char text box)
+3. If self-description provided:
+   - LLM generates 10-15 personality statements
+   - User validates each: **👍 Agree** or **👎 Disagree** (binary, simple)
+4. If no self-description:
+   - LLM generates 10 generic statements based on types
+   - User validates
+5. User can immediately generate first artifact
 
-**Path 2: "I know my types"**
-1. User manually enters MBTI, Enneagram, Big5 scores
-2. Optional: User provides self-description text box
-3. If self-description provided: LLM generates 15-20 statements
-4. User validates generated statements
+**V1 Simplifications:**
+- ❌ No ChatGPT import path (too complex, error-prone)
+- ❌ No Big5 input (just MBTI + Enneagram)
+- ❌ No conversational assessment (just manual entry)
+- ❌ No "skip" option (everyone gets basic profile)
+- ✅ Simple: Manual type entry + validate 10 statements = ready
 
-**Path 3: "Take conversational assessment"**
-1. LLM-driven adaptive Q&A (5-10 exchanges)
-2. LLM analyzes responses → generates profile + statements
-3. User validates statements
+**V2+: Add ChatGPT import, conversational assessment, Big5 sliders
 
-**Path 4: "Skip for now"**
-1. User starts with blank profile
-2. Can manually add statements
-3. Can take assessment later from profile page
-
-**All paths converge to:**
-- User has personality profile (MBTI/Enneagram/Big5 with precision)
-- User has 10-25 validated statements
-- User can immediately generate first artifact
-
-### 4.3 Personality Profile Page
+### 4.3 Personality Profile Page (SIMPLIFIED for V1)
 
 **Layout:**
 - Top section: "Your Personality Summary"
   - MBTI distribution (e.g., "75% INTJ, 20% INTP, 5% ENTJ")
   - Enneagram distribution (e.g., "60% Type 5w4, 30% Type 1")
-  - Big5 scores (visual sliders or bars)
+  - "Edit Types" button (re-run onboarding)
 
-- Middle section: "Key Statements About You" (DECISION #3: Binary + precision + emphasis)
-  - Filterable by category
-  - Sortable by uncertainty (1 - precision) for prioritization
+- Middle section: "Statements About You"
+  - Simple list (no complex sorting/filtering for V1)
   - Each statement shows:
-    - Statement text (with ⭐ if emphasized)
-    - Current credence: 👍 (agree), 👎 (disagree), or - (skipped)
-    - Precision: Visual confidence indicator (0-1)
-    - Actions:
-      - 👍 Agree | 👎 Disagree | ❌ Skip
-      - ⭐ Emphasize (marks as core belief, 2x weight)
-      - ✏️ Rephrase (inline editing)
-      - 🗑️ Delete
+    - Statement text
+    - Current state: 👍 Agreed | 👎 Disagreed | ⚪ Not validated
+    - Actions: **👍 Agree** | **👎 Disagree** | **🗑️ Delete**
 
 - Bottom section: "Add New Statement"
-  - Text input to add custom statements
-  - Optional: "Generate more statements" button
+  - Text input (10-500 chars)
+  - "Add Statement" button
+  - "Generate 10 More Statements" button
 
-### 4.4 Artifact Generation Flow (DECISION #4: Fingerprint-based caching)
+**V1 Simplifications:**
+- ❌ No precision indicators (defer to V2)
+- ❌ No emphasis feature (defer to V2)
+- ❌ No skip option (just don't validate)
+- ❌ No inline editing (use delete + add)
+- ❌ No uncertainty-based prioritization (just chronological order)
+- ✅ Simple: Binary agree/disagree, clean UI
 
-1. User navigates to "Generate Guide"
-2. Selects artifact type (or enters custom prompt)
-3. System calculates current profile hash (SHA-256 of profile + validated statements)
-4. System checks cache:
-   - Cache key: `artifact:{userId}:{artifactType}:{profileHash}`
-   - If cache hit: Return cached artifact (Redis or database)
-5. If cache miss (new or profile changed):
-   - Create personality fingerprint (snapshot of current profile)
-   - Construct prompt from profile + statements + artifact type
-   - Call LLM API (Claude Sonnet 4.5 - DECISION #2)
-   - Generate unique 8-char share ID (DECISION #7)
-   - Save response as artifact with fingerprint
-   - Cache in Redis with 30-day TTL
+### 4.4 Artifact Generation Flow (SIMPLIFIED for V1)
+
+1. User navigates to "Generate Artifact"
+2. Selects artifact type from 5 predefined templates:
+   - Workday Guide
+   - Communication Style
+   - Decision Framework
+   - Conflict Resolution
+   - Dating Profile Bio
+3. System checks if artifact exists for this user + type:
+   - If exists and profile not updated: Show cached artifact
+   - If exists but profile updated recently: Show with "⚠️ Profile changed - consider regenerating"
+   - If doesn't exist: Generate new
+4. To generate:
+   - Construct prompt from profile (MBTI + Enneagram distributions) + validated statements
+   - Call LLM API (Claude Sonnet 4.5)
+   - Save response as artifact (overwrites existing for this type)
+   - Cache in Redis: `artifact:{userId}:{type}:latest`
    - Store in database
-6. Display artifact to user
-7. **Deviation detection:** System continuously calculates deviation between current profile and artifact fingerprint
-8. If deviation > 0.30: Show "Profile changed - Regenerate?" banner
-9. User can:
-   - Regenerate (invalidates cache, creates new with diff-aware prompt)
-   - View changes (see what changed since generation)
-   - Share artifact (toggle public, copy share link)
-   - Edit statements inline in artifact (interactive artifacts)
+5. Display artifact to user with actions:
+   - **Regenerate** button (overwrites existing)
+   - **Delete** button
+   - Copy to clipboard button
 
-### 4.5 Custom Prompts & Statement Generation (Decisions #10-11)
+**V1 Simplifications:**
+- ❌ No fingerprints or deviation detection (just check: profile.updatedAt > artifact.createdAt)
+- ❌ No diff-aware prompting (always full regeneration)
+- ❌ No custom prompts (5 predefined templates only)
+- ❌ No share links (artifacts private only)
+- ❌ No interactive editing (static markdown display)
+- ✅ Simple: Generate → Cache → Show. Invalidate when profile changes.
 
-**Custom Artifact Prompts:**
-- **V1 (MVP):** Predefined templates only
-  - 5 templates: Workday Guide, Communication Style, Decision Framework, Conflict Style, Dating Profile
-  - No custom prompts (prevents prompt injection and quality issues)
-- **V2+:** Custom prompts with sanitization
-  - User can enter custom prompt (1000 char limit)
-  - Sanitization: Remove HTML/script tags, prevent prompt injection
-  - Template scaffolding wraps user input safely
-  - Preview before generation
+### 4.5 Statement Generation (SIMPLIFIED for V1)
 
-**Statement Generation Strategy:**
-- **Initial onboarding:** 20-25 statements (from ChatGPT import or LLM)
-- **After onboarding:** User-triggered only via "Generate more statements" button
-- **No automatic generation:** Prevents overwhelming users
-- **Information-theoretic prioritization:** Suggest reviewing uncertain statements (low precision) first
-- **Smart prompts:** "You have 15 validated statements. Add 5 more for better artifacts."
-- **Generation batch size:** 10 new statements per request (not 50+)
-- **LLM generates based on:**
-  1. Current personality types (fill gaps)
-  2. Statement categories with few examples
-  3. Contradictions in existing statements (resolve ambiguity)
+**Strategy:**
+- **Initial onboarding:** 10-15 statements generated from user's types + optional description
+- **After onboarding:** User can click "Generate 10 More Statements" button
+- **No automatic generation:** User stays in control
+- **Generation logic:** LLM generates based on:
+  1. Current MBTI + Enneagram types
+  2. Existing validated statements (avoid duplicates)
+  3. Random categories to ensure diversity
 
-**Rationale:**
-- Start simple with curated templates (V1)
-- Add custom prompts once we understand usage patterns (V2)
-- User stays in control (no surprise statement generation)
-- Quality over quantity (20 well-validated > 100 uncertain statements)
+**V1 Simplifications:**
+- ❌ No information-theoretic prioritization (simple random generation)
+- ❌ No smart prompts about profile completeness
+- ❌ No contradiction detection
+- ✅ Simple: Click button → get 10 statements → validate
 
-### 4.6 Profile Updates & Statement Management (Decisions #16-17)
+### 4.6 Profile Management (SIMPLIFIED for V1)
 
-**Profile Update Mechanism:**
-- Statements are informational only
-- Do NOT automatically update MBTI/Enneagram/Big5 when user validates statements
-- "Re-evaluate personality types" button:
-  1. Analyzes all validated statements
-  2. LLM suggests updated distributions
-  3. Shows comparison: "Your analysis suggests: INTJ (85%) vs previous INTJ (75%)"
-  4. User approves or rejects changes
-- Prevents confusing auto-updates
+**Profile Updates:**
+- User can manually edit MBTI/Enneagram types via "Edit Types" button
+- Statements are validated by user (agree/disagree)
+- No automatic re-evaluation of types based on statements (too complex for V1)
 
-**Statement Deduplication:**
-- **MVP:** No automated deduplication (manual removal only)
-- **V2+:** Show "similar statements" warning using embeddings
-- Rationale: Not critical for MVP, users won't create many duplicates manually
+**Deduplication:**
+- No automated detection (user manually deletes duplicates if they notice)
 
-**Artifact Versioning:**
-- **MVP:** Single latest version only (regenerating overwrites)
-- **V2+:** Add version history with "View history" feature
-- Rationale: Simpler data model, users care about current artifact
+**Versioning:**
+- Single version per artifact type (regenerate overwrites)
+- No history tracking
 
-**Big5 Score Input:**
-- Initial assessment: LLM infers Big5 from MBTI + Enneagram + statements
-- Profile page: Sliders for each trait (0-100)
-- User can adjust manually (user-adjusted = high precision)
-- No separate Big5 questionnaire (avoids 44-120 question test)
+**V1 Simplifications:**
+- ❌ No Big5 (just MBTI + Enneagram)
+- ❌ No LLM-powered type re-evaluation
+- ❌ No statement similarity detection
+- ❌ No artifact version history
+- ✅ Simple: User controls types, validates statements, generates artifacts
 
 ## 5. Key Services & Components
 
@@ -733,40 +713,129 @@ Format as markdown with clear sections.
 - Collapsible sections for personality type distributions
 - Bottom navigation on mobile, sidebar on desktop
 
-## 7. API Endpoints
+## 7. API Contracts & Request/Response Schemas (NEW)
+
+### Standard Response Formats
+
+```typescript
+// Success response
+interface SuccessResponse<T> {
+  data: T;
+}
+
+// Error response
+interface ErrorResponse {
+  error: {
+    code: string;           // "RATE_LIMIT_EXCEEDED", "INVALID_INPUT", etc.
+    message: string;        // User-friendly message
+    details?: any;          // Developer-friendly details
+    retryAfter?: number;    // Seconds (for rate limits)
+  }
+}
+```
+
+### Artifact Generation (Critical Path)
+
+```typescript
+// POST /api/artifacts/generate
+interface GenerateArtifactRequest {
+  type: 'workday' | 'communication' | 'decision' | 'conflict' | 'dating';
+}
+
+interface GenerateArtifactResponse {
+  id: string;
+  type: string;
+  title: string;
+  content: string;          // Markdown
+  generatedBy: string;      // "claude-sonnet-4.5"
+  createdAt: string;        // ISO 8601
+}
+
+// Error codes:
+// - RATE_LIMIT_EXCEEDED: Daily limit reached
+// - LLM_API_FAILURE: Claude API error
+// - INSUFFICIENT_PROFILE: Need more validated statements
+```
+
+### Statement Validation
+
+```typescript
+// PUT /api/statements/:id
+interface UpdateStatementRequest {
+  credence: -1 | 0 | 1;     // V1: Binary only
+}
+
+interface StatementResponse {
+  id: string;
+  statement: string;
+  credence: number;
+  userValidated: boolean;
+  source: string;
+  category?: string;
+  createdAt: string;
+}
+```
+
+### Profile Updates with Optimistic Locking
+
+```typescript
+// PUT /api/profile/mbti
+interface UpdateMBTIRequest {
+  distribution: Array<{
+    type: MBTIType;
+    probability: number;    // Must sum to 1.0
+  }>;
+  expectedVersion: number;  // For optimistic locking
+}
+
+interface UpdateMBTIResponse {
+  version: number;          // Incremented version
+  distribution: Array<{
+    type: MBTIType;
+    probability: number;
+  }>;
+}
+
+// Error codes:
+// - CONFLICT: Profile was updated by another request (version mismatch)
+// - INVALID_DISTRIBUTION: Probabilities don't sum to 1.0
+```
+
+**Recommendation:** Use tRPC or OpenAPI to enforce type safety between frontend and backend.
+
+## 8. API Endpoints (SIMPLIFIED for V1)
 
 ### Authentication
 - `POST /api/auth/google` - Initiate Google OAuth
 - `GET /api/auth/google/callback` - OAuth callback
+- `POST /api/auth/refresh` - Refresh access token
 - `POST /api/auth/logout` - Logout
 - `GET /api/auth/me` - Get current user
 
 ### Profile
 - `GET /api/profile` - Get current user's personality profile
-- `PUT /api/profile/mbti` - Update MBTI distribution
-- `PUT /api/profile/enneagram` - Update Enneagram distribution
-- `PUT /api/profile/big5` - Update Big5 scores
+- `PUT /api/profile/mbti` - Update MBTI distribution (with version check)
+- `PUT /api/profile/enneagram` - Update Enneagram distribution (with version check)
 
-### Statements (DECISION #3: Binary credence + precision + emphasis)
-- `GET /api/statements` - List all statements (with filters: category, emphasized, skipped)
+### Statements (V1: Simplified)
+- `GET /api/statements` - List all statements
 - `POST /api/statements` - Create new statement
-- `PUT /api/statements/:id` - Update statement credence, precision, or text
-- `PUT /api/statements/:id/emphasize` - Toggle emphasis (DECISION #3)
-- `PUT /api/statements/:id/skip` - Skip statement (DECISION #3)
-- `DELETE /api/statements/:id` - Delete statement (returns affected artifacts)
-- `POST /api/statements/generate` - Generate new statements via LLM
+- `PUT /api/statements/:id` - Update statement credence (-1, 0, 1)
+- `DELETE /api/statements/:id` - Delete statement
+- `POST /api/statements/generate` - Generate 10 new statements via LLM
 
-### Artifacts (DECISION #4: Fingerprints, DECISION #7: Sharing)
-- `GET /api/artifacts` - List user's artifacts (with deviation scores)
+### Artifacts (V1: Simplified)
+- `GET /api/artifacts` - List user's artifacts
 - `GET /api/artifacts/:id` - Get specific artifact
-- `POST /api/artifacts/generate` - Generate new artifact
-  - Body: `{ type, customPrompt? }`
-  - Returns: Artifact with fingerprint and share ID
-- `PUT /api/artifacts/:id/regenerate` - Regenerate with diff-aware prompt
-- `PUT /api/artifacts/:id/share` - Toggle public/private (DECISION #7)
-- `POST /api/artifacts/:id/share/regenerate-id` - Generate new share ID
+- `POST /api/artifacts/generate` - Generate new artifact (predefined template only)
 - `DELETE /api/artifacts/:id` - Delete artifact
-- `GET /share/:shareId` - Public route for shared artifacts (no auth)
+
+**V1 Removals:**
+- ❌ No `/share/:shareId` route (no sharing)
+- ❌ No emphasis/skip endpoints (removed features)
+- ❌ No Big5 endpoints (removed from V1)
+- ❌ No regenerate-share-id (no sharing)
+- ❌ No diff-aware regeneration (always full regeneration)
 
 ### Analytics
 - `GET /api/usage/llm` - LLM cost tracking for user
@@ -774,69 +843,61 @@ Format as markdown with clear sections.
 
 ## 8. Security & Privacy
 
-### Authentication & Authorization (DECISION #6: 8hr/30day JWT)
-- All API endpoints require authentication (except auth endpoints and /share/:shareId)
-- **Access tokens:** 8-hour expiration (HS256)
+### Authentication & Authorization (SIMPLIFIED for V1)
+- All API endpoints require authentication (except auth endpoints)
+- **Access tokens:** 15-minute expiration (HS256) - Industry standard for security
 - **Refresh tokens:** 30-day expiration with rotation
 - Refresh tokens stored in database (revocable)
 - HttpOnly cookies for token storage (not localStorage)
 - CSRF protection for state-changing operations
 - CORS configuration for frontend domain only
-- Multi-device sessions allowed with session management UI
 
-### Data Privacy & Deletion (Decision #13)
+**V1 Simplifications:**
+- ✅ 15-min tokens (not 8hr) - Better security, seamless refresh via React Query
+- ❌ No share links in V1 (all artifacts private)
+- ❌ No multi-device session management UI (defer to V2)
+- ❌ No user-agent/IP tracking in refresh_tokens table (defer to V2)
+
+### Data Privacy & Deletion (SIMPLIFIED for V1)
 
 **User Data Deletion:**
-- **Users:** Soft delete with 30-day recovery window
+- **V1:** Hard delete immediately (no recovery window)
   1. User clicks "Delete Account"
-  2. Account marked as `deleted_at: Date` (soft delete)
-  3. User cannot login but can recover via email link
-  4. After 30 days: Cron job hard deletes account + all data
-  5. Email freed up for re-registration
-- **Statements:** Hard delete immediately (easily regenerated)
-- **Artifacts:** Hard delete immediately (easily regenerated)
-- **LLM usage logs:** Anonymized on user deletion (GDPR compliance)
+  2. Show confirmation modal: "This cannot be undone"
+  3. Delete user → Cascades to all data (profiles, statements, artifacts, refresh tokens)
+  4. Clear Redis cache for user
+  5. Anonymize LLM usage logs
 
 ```typescript
-// Soft delete user
-async function softDeleteUser(userId: string): Promise<void> {
-  await db.users.update({
-    where: { id: userId },
-    data: {
-      deleted_at: new Date(),
-      email: `deleted_${userId}@example.com`
-    }
-  });
+// Hard delete (V1: Simple)
+async function deleteUser(userId: string): Promise<void> {
+  // Database cascades handle all related data
+  await db.users.delete({ where: { id: userId } });
 
-  await sendEmail(user.email, {
-    subject: "Account deletion scheduled",
-    body: `Your account will be deleted in 30 days. Click to cancel: ${recoveryLink}`
-  });
-}
-
-// Cron job: Hard delete after 30 days
-async function hardDeleteExpiredUsers(): Promise<void> {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const expiredUsers = await db.users.findMany({
-    where: { deleted_at: { lte: thirtyDaysAgo } }
-  });
-
-  for (const user of expiredUsers) {
-    await db.users.delete({ where: { id: user.id } });  // Cascades to all data
-    await redis.del(...await redis.keys(`artifact:${user.id}:*`));
-    await db.llm_usage.updateMany({
-      where: { userId: user.id },
-      data: { userId: 'DELETED', anonymized: true }
-    });
+  // Clear cache
+  const cacheKeys = await redis.keys(`artifact:${userId}:*`);
+  if (cacheKeys.length > 0) {
+    await redis.del(...cacheKeys);
   }
+
+  // Anonymize cost tracking (keep for analytics)
+  await db.llm_usage.updateMany({
+    where: { userId },
+    data: { userId: 'DELETED_USER' }
+  });
 }
 ```
 
 **Data Access:**
 - Users can only access their own data
-- No data sharing between users
+- No data sharing (no share links in V1)
 - Encrypted environment variables for API keys
-- GDPR compliance: Right to erasure honored after 30 days
+- GDPR compliance: Right to erasure honored immediately
+
+**V1 Simplifications:**
+- ❌ No soft delete (no deleted_at column, no recovery window, no cron jobs)
+- ❌ No email notifications
+- ✅ Simple: Click → Confirm → Delete. Done.
 
 ### Rate Limiting (DECISION #2)
 - Per-user daily limits (prevent API abuse):
@@ -1166,6 +1227,80 @@ npm run test:watch
 - Documentation: Tests serve as examples
 - Claude-friendly: Fast tests mean immediate verification of changes
 
+### 9.5 Cost Estimation & Budget Management (NEW - Critical Missing Piece)
+
+**Per-User Cost Model:**
+
+```typescript
+// Onboarding (one-time)
+const ONBOARDING_COST = {
+  initialStatements: 15,      // 15 statements × ~500 tokens = 7,500 tokens
+  costPerTokenInput: 0.000003,  // Claude Sonnet 4.5: $3/M input tokens
+  costPerTokenOutput: 0.000015, // Claude Sonnet 4.5: $15/M output tokens
+  totalOnboarding: 0.15         // ~$0.15 per user one-time
+};
+
+// Ongoing usage (per day)
+const DAILY_COST_WORST_CASE = {
+  artifactGeneration: 20,       // 20 artifacts/day (max limit)
+  tokensPerArtifact: 2000,      // ~2K output tokens per artifact
+  costPerArtifact: 0.05,        // ~$0.05 per artifact
+  dailyArtifacts: 1.00,         // 20 × $0.05 = $1.00/day
+
+  statementGeneration: 10,      // 10 batches/day (max limit)
+  statementsPerBatch: 10,
+  costPerBatch: 0.02,           // ~$0.02 per batch
+  dailyStatements: 0.20,        // 10 × $0.02 = $0.20/day
+
+  totalDailyWorstCase: 1.20     // $1.20/day if user maxes out limits
+};
+
+// Realistic average usage
+const DAILY_COST_AVERAGE = {
+  artifacts: 2,                 // 2 artifacts/day (realistic)
+  statements: 1,                // 1 batch/day (realistic)
+  totalDailyAverage: 0.12       // ~$0.12/day realistic
+};
+
+// Monthly projections
+const MONTHLY_COST = {
+  perUserWorstCase: 36.00,      // $1.20 × 30 days
+  perUserAverage: 3.60,         // $0.12 × 30 days
+  breakEvenRevenue: 5.00        // Need $5/user/month to be profitable
+};
+
+// Scale projections
+const COST_AT_SCALE = {
+  users100: {
+    worstCase: 3600,            // $3,600/month if all users max out
+    average: 360,               // $360/month realistic
+    breakEven: 500              // Need $500/month revenue
+  },
+  users1000: {
+    worstCase: 36000,           // $36,000/month
+    average: 3600,              // $3,600/month realistic
+    breakEven: 5000             // Need $5,000/month revenue
+  }
+};
+```
+
+**Budget Controls:**
+- **Alert threshold:** $500/month - Send email notification
+- **Hard cap:** $1,000/month - Temporarily disable new artifact generation, notify users
+- **Per-user cost tracking:** Log all LLM usage in `llm_usage` table
+- **Dashboard:** Show cost per user, total monthly cost, trending
+
+**V1 Strategy:**
+- Monitor costs daily
+- No monetization (fully free)
+- Hard budget cap at $1,000/month
+- If costs exceed $500/month: Reduce daily limits from 20/10 to 10/5
+
+**V2 Strategy (if costs are issue):**
+- Freemium: 5 artifacts/month free, $5/month for 50 artifacts
+- Usage-based: $0.10 per artifact above free tier
+- Show users their cost in real-time
+
 ## 10. Deployment Strategy (Railway.app)
 
 ### Development Environment (V1: Single-User)
@@ -1402,8 +1537,152 @@ The following 25 decisions are deferred to post-MVP with sensible defaults for V
 | Frontend Framework | React + TypeScript | Industry standard, type safety, large ecosystem |
 | Styling | TailwindCSS | Rapid development, responsive utilities, customizable |
 | Backend Framework | Express + TypeScript | Simple, flexible, good for API servers |
-| Database | PostgreSQL | JSONB support for distributions, robust, scalable |
-| Cache | Redis | Fast, TTL support, widely used |
-| Auth | Passport.js + Google OAuth | Easy integration, secure |
+| Database | PostgreSQL | Normalized schema (not JSONB), robust, queryable |
+| Cache | Redis | Fast, simple key-value for artifacts |
+| Auth | Passport.js + Google OAuth | Easy integration, 15-min JWT tokens |
 | LLM Provider | Claude API (primary) | High quality outputs, good for personality analysis |
-| Deployment | Docker + Railway/Render | Easy deployment, cost-effective |
+| Testing | Vitest | Fast unit tests (<1s), ESM-native |
+| Deployment | Railway.app | Easy deployment, managed PostgreSQL, cost-effective |
+
+---
+
+## SIMPLIFIED MVP SUMMARY (After Architecture Critique)
+
+### 🎯 V1 Scope - Ship in 1 Week
+
+**Core Loop:**
+1. User signs in with Google
+2. User enters MBTI + Enneagram types manually
+3. LLM generates 10-15 personality statements
+4. User validates statements (binary: 👍 agree / 👎 disagree)
+5. User generates artifacts from 5 predefined templates
+6. Artifacts cached, regenerated when profile changes
+
+**What's In V1:**
+- ✅ Google OAuth (15-min JWT tokens)
+- ✅ MBTI + Enneagram (no Big5)
+- ✅ Binary statement validation (no precision/emphasis)
+- ✅ 5 predefined artifact templates
+- ✅ Simple cache invalidation (no fingerprints)
+- ✅ Hard delete (no soft delete)
+- ✅ Normalized database schema
+- ✅ Fast unit tests (<1s with Vitest)
+- ✅ Cost tracking with hard budget cap ($1,000/month)
+
+**What's Deferred to V2:**
+- ❌ Big5 personality framework
+- ❌ Precision/emphasis/skipped on statements
+- ❌ Fingerprint-based smart caching
+- ❌ Deviation detection
+- ❌ ChatGPT import path
+- ❌ Share links for artifacts
+- ❌ Soft delete with recovery
+- ❌ Custom artifact prompts
+- ❌ Information-theoretic prioritization
+- ❌ Diff-aware LLM prompting
+- ❌ Multi-device session management
+
+### 📊 Complexity Reduction
+
+**Original Design:**
+- 48 decisions, 10+ complex features
+- Fingerprint-based caching with deviation detection
+- 5-dimensional statement model (credence + precision + emphasis + skipped + validated)
+- JSONB database schema
+- 8-hour JWT tokens
+- Soft delete with cron jobs
+- ChatGPT integration
+- Information-theoretic prioritization
+
+**Simplified V1:**
+- Focus on 15 core decisions
+- Simple cache invalidation (profile.updatedAt > artifact.createdAt)
+- 2-dimensional statement model (credence + validated)
+- Normalized database schema (queryable!)
+- 15-minute JWT tokens (industry standard)
+- Hard delete (immediate)
+- Manual entry only
+- Random statement order
+
+### 🚀 Expected Timeline
+
+**V1 (1 week):**
+- Day 1: Project setup, database schema, auth scaffolding
+- Day 2-3: Profile models, statement CRUD, simple onboarding
+- Day 4-5: LLM integration, artifact generation, caching
+- Day 6: UI polish, error handling, testing
+- Day 7: Deploy to Railway, test end-to-end
+
+**V2 (After MVP validation - 2 weeks):**
+- Add precision/emphasis features if users want them
+- Add fingerprint-based caching if it's actually needed
+- Add Big5 support if users request it
+- Add share links if users want to share
+
+### 💰 Cost Model
+
+- **Per user onboarding:** $0.15 (one-time)
+- **Average daily cost:** $0.12/user (2 artifacts + 1 statement batch)
+- **Worst case daily:** $1.20/user (if maxing out 20/10 limits)
+- **100 users:** ~$360/month (realistic) / $3,600/month (worst case)
+- **Budget cap:** $1,000/month hard limit
+
+### ✅ Success Criteria (V1)
+
+**Ship if:**
+- Users can sign in
+- Users can validate 10+ statements
+- Users can generate 5 artifact types
+- Artifacts are personalized (different for different users)
+- Page loads in <3s
+- Artifact generation in <15s
+- Unit tests pass in <1s
+
+**Don't ship if:**
+- Can't integrate Claude API reliably
+- Database schema doesn't support probability distributions
+- Cost exceeds $1,000/month in testing
+
+### 📝 Next Steps (Implementation Order)
+
+1. **Setup (Day 1):**
+   - Initialize project with Vite + React + TypeScript
+   - Setup Express backend with TypeScript
+   - Create PostgreSQL schema (normalized tables)
+   - Setup Railway deployment
+   - Configure environment variables
+
+2. **Auth (Day 1-2):**
+   - Google OAuth integration
+   - JWT token generation (15-min access, 30-day refresh)
+   - Protected route middleware
+
+3. **Profile & Statements (Day 2-3):**
+   - Profile models (MBTI + Enneagram)
+   - Statement CRUD endpoints
+   - Simple onboarding: manual type entry + validate 10 statements
+
+4. **LLM Integration (Day 4):**
+   - Claude API integration
+   - Statement generation (10 statements from types)
+   - Cost tracking in database
+
+5. **Artifacts (Day 5):**
+   - 5 predefined templates
+   - Artifact generation endpoint
+   - Redis caching
+   - Simple cache invalidation
+
+6. **UI & Polish (Day 6):**
+   - Profile page
+   - Artifact gallery
+   - Error handling
+   - Loading states
+
+7. **Testing & Deploy (Day 7):**
+   - Unit tests for core logic
+   - Deploy to Railway
+   - End-to-end testing
+   - Launch! 🚀
+
+**Ship fast. Learn fast. Iterate fast.**
