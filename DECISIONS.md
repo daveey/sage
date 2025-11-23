@@ -221,14 +221,15 @@ async function checkRateLimit(userId: string, operation: string): Promise<boolea
 interface PersonalityStatement {
   credence: number;  // -1 (disagree), 0 (neutral/skipped), 1 (agree)
   precision: number;  // 0-1: how confident/certain (0 = very uncertain, 1 = very certain)
+  emphasized: boolean;  // true if user marked as particularly important
   userValidated: boolean;  // true if user clicked thumbs up/down
   skipped: boolean;  // true if user clicked X
 }
 
 // Examples:
-// "I prefer working alone" - credence: 1, precision: 0.95 (strongly agree, very sure)
-// "I like spicy food" - credence: 0.3, precision: 0.4 (weakly agree, not very sure)
-// "I'm a morning person" - credence: -1, precision: 1.0 (strongly disagree, absolutely certain)
+// "I prefer working alone" - credence: 1, precision: 0.95, emphasized: true (core belief!)
+// "I like spicy food" - credence: 0.3, precision: 0.4, emphasized: false (minor preference)
+// "I'm a morning person" - credence: -1, precision: 1.0, emphasized: true (definitely NOT me)
 ```
 
 **Mobile UI (Swipe Mode):**
@@ -283,15 +284,83 @@ Certainty: [====|----] 40%
 - ChatGPT import: 0.7 (fairly confident)
 - User manually wrote statement: 0.9 (high confidence)
 
+**Emphasis Feature:**
+User can highlight particularly important statements (core beliefs, defining traits).
+
+```
+Statement: "I thrive in deep, focused work"
+[⭐ Emphasize] [✏️ Rephrase] [🗑️ Delete]
+
+After emphasizing:
+★ "I thrive in deep, focused work" (emphasized)
+[Remove emphasis] [✏️ Rephrase] [🗑️ Delete]
+```
+
+**Emphasized Statements in Artifacts:**
+All statements shown in artifacts are interactive:
+
+```markdown
+## Key Personality Traits
+
+Based on your profile:
+- ★ You thrive in deep, focused work [✏️] [🗑️]
+- You prefer asynchronous communication [⭐] [✏️] [🗑️]
+- You value autonomy highly [⭐] [✏️] [🗑️]
+
+★ = Emphasized (core belief)
+[⭐] = Emphasize this
+[✏️] = Edit statement
+[🗑️] = Remove from profile
+```
+
+When user clicks actions in artifact:
+- **Emphasize**: Marks as emphasized, increases weight in future generations
+- **Edit**: Opens inline editor, updates statement text
+- **Delete**: Removes from profile, marks artifact as outdated
+
+**Weighting in Artifact Generation:**
+Emphasized statements carry 2x weight:
+
+```typescript
+function calculateStatementWeight(statement: Statement): number {
+  const baseWeight = Math.abs(statement.credence) * statement.precision;
+  const emphasisMultiplier = statement.emphasized ? 2.0 : 1.0;
+  return baseWeight * emphasisMultiplier;
+}
+
+// When selecting statements for artifact prompt
+const weightedStatements = statements
+  .map(s => ({ ...s, weight: calculateStatementWeight(s) }))
+  .sort((a, b) => b.weight - a.weight)
+  .slice(0, 20);  // Top 20 most important statements
+```
+
 **Database Updates:**
 ```sql
 ALTER TABLE personality_statements
   ADD COLUMN skipped BOOLEAN DEFAULT FALSE,
-  ADD COLUMN precision DECIMAL(3,2) DEFAULT 0.5 CHECK (precision >= 0 AND precision <= 1);
+  ADD COLUMN precision DECIMAL(3,2) DEFAULT 0.5 CHECK (precision >= 0 AND precision <= 1),
+  ADD COLUMN emphasized BOOLEAN DEFAULT FALSE;
 
 -- Index for filtering high-uncertainty statements
 CREATE INDEX idx_statements_skipped ON personality_statements(user_id, skipped);
 CREATE INDEX idx_statements_uncertainty ON personality_statements(user_id, precision);
+CREATE INDEX idx_statements_emphasized ON personality_statements(user_id, emphasized) WHERE emphasized = TRUE;
+```
+
+**API Endpoints for Statement Actions:**
+```typescript
+// Emphasize/de-emphasize
+PUT /api/statements/:id/emphasize
+Body: { emphasized: boolean }
+
+// Edit statement (can be called from anywhere)
+PUT /api/statements/:id
+Body: { statement: string }
+
+// Delete statement (marks artifact as outdated if used in any)
+DELETE /api/statements/:id
+Response: { artifactsAffected: number, needsRegeneration: boolean }
 ```
 
 **Personality Type Distributions (Also Get Precision):**
@@ -367,6 +436,9 @@ function suggestStatementsToReview(userId: string): Statement[] {
 - **Prioritize reviewing uncertain beliefs**
 - **Measure information gain from new evidence**
 - **Better artifact generation (weight by precision)**
+- **✨ Emphasis highlights core beliefs** (2x weight in generation)
+- **✨ Interactive artifacts** (edit/delete/emphasize from anywhere)
+- **✨ Profile refinement everywhere** (not just profile page)
 
 ---
 
@@ -654,14 +726,158 @@ CREATE INDEX idx_artifacts_outdated
 
 ---
 
-### 6. JWT Token Strategy
+### 6. JWT Token Strategy ✅
 **Question:** What should JWT access and refresh token lifespans be? (#30)
 
-**Decision:** [PENDING]
+**Decision:** Convenience-first with 8-hour access tokens and 30-day refresh tokens
 
-**Rationale:** [To be filled]
+**Token Lifespans:**
+- **Access Token:** 8 hours (full workday without re-auth)
+- **Refresh Token:** 30 days (with rotation)
+- **Rotation:** New refresh token issued on each use
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- User preference: Prioritize convenience over maximum security
+- 8 hours: Covers full workday + evening without interruption
+- 30 days: Users stay logged in for a month (typical usage pattern)
+- Refresh rotation: Maintains security despite longer lifespans
+- Trade-off: Slightly less secure than 1hr tokens, but much better UX
+
+**Implementation Notes:**
+
+```typescript
+const TOKEN_CONFIG = {
+  access: {
+    expiresIn: '8h',
+    algorithm: 'HS256' as const
+  },
+  refresh: {
+    expiresIn: '30d',
+    rotate: true,  // Issue new refresh token on use
+    storeInDb: true  // Track active refresh tokens for revocation
+  }
+};
+
+// JWT payload
+interface AccessTokenPayload {
+  userId: string;
+  email: string;
+  iat: number;  // Issued at
+  exp: number;  // Expires at
+}
+
+interface RefreshTokenPayload {
+  userId: string;
+  tokenId: string;  // Unique ID for this refresh token
+  iat: number;
+  exp: number;
+}
+```
+
+**Refresh Token Storage (for revocation):**
+```sql
+CREATE TABLE refresh_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(64) NOT NULL,  -- SHA-256 hash of token
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_used_at TIMESTAMP,
+  revoked BOOLEAN DEFAULT FALSE,
+  user_agent TEXT,
+  ip_address INET
+);
+
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+```
+
+**Token Refresh Flow:**
+```typescript
+async function refreshAccessToken(refreshToken: string): Promise<Tokens> {
+  // 1. Verify refresh token
+  const payload = jwt.verify(refreshToken, process.env.JWT_SECRET);
+
+  // 2. Check if token is in database and not revoked
+  const storedToken = await db.refreshTokens.findOne({
+    where: {
+      token_hash: sha256(refreshToken),
+      revoked: false,
+      expires_at: { gt: new Date() }
+    }
+  });
+
+  if (!storedToken) {
+    throw new Error('Invalid or revoked refresh token');
+  }
+
+  // 3. Generate new access token
+  const newAccessToken = generateAccessToken(payload.userId);
+
+  // 4. Rotate refresh token (invalidate old, create new)
+  await db.transaction(async (tx) => {
+    // Mark old token as revoked
+    await tx.refreshTokens.update({
+      where: { id: storedToken.id },
+      data: { revoked: true }
+    });
+
+    // Create new refresh token
+    const newRefreshToken = generateRefreshToken(payload.userId);
+    await tx.refreshTokens.create({
+      data: {
+        user_id: payload.userId,
+        token_hash: sha256(newRefreshToken),
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)  // 30 days
+      }
+    });
+
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  });
+}
+```
+
+**Revoke All Sessions:**
+```typescript
+// User clicks "Logout all devices"
+async function revokeAllUserTokens(userId: string): Promise<number> {
+  const result = await db.refreshTokens.updateMany({
+    where: { user_id: userId, revoked: false },
+    data: { revoked: true }
+  });
+  return result.count;
+}
+```
+
+**Automatic Cleanup:**
+```typescript
+// Cron job: Delete expired refresh tokens daily
+async function cleanupExpiredTokens(): Promise<number> {
+  const result = await db.refreshTokens.deleteMany({
+    where: {
+      OR: [
+        { expires_at: { lt: new Date() } },
+        { revoked: true, created_at: { lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }  // 7 days old
+      ]
+    }
+  });
+  return result.count;
+}
+```
+
+**Security Considerations:**
+- Longer tokens = larger attack window if stolen
+- Mitigation: Refresh rotation limits token lifetime
+- Mitigation: Store tokens in httpOnly cookies (not localStorage)
+- Mitigation: HTTPS only in production
+- Mitigation: User can revoke all sessions manually
+
+**Benefits:**
+- Seamless UX: Stay logged in for 30 days
+- No annoying re-auth during work sessions
+- Still revocable: Can logout all devices
+- Trackable: Know which devices are active
 
 ---
 
