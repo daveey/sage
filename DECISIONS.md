@@ -1040,100 +1040,919 @@ ALTER TABLE personality_profiles
 
 ## High Priority Decisions (Decide in First 2 Weeks)
 
-### 9. Custom Prompts Approach
-**Question:** How much freedom should users have in custom prompts? (#10)
+### 10. Custom Prompts Approach ✅
+**Question:** How much freedom should users have in custom prompts? (Related: CLARIFICATIONS #10)
 
-**Decision:** [PENDING]
+**Decision:** Phased approach - predefined templates for V1, custom prompts in V2+
 
-**Rationale:** [To be filled]
+**Phased Implementation:**
+- **V1:** Predefined templates only
+  - 5 templates: Workday Guide, Communication Style, Decision Framework, Conflict Style, Dating Profile
+  - No custom prompts (security + quality risk)
+- **V2:** Add custom prompts with safeguards
+  - 1000 char limit (Decision #8)
+  - Sanitization to prevent prompt injection
+  - Template scaffolding: "Generate a guide for [topic] focusing on [aspect]"
+  - Preview/validation before generation
+- **V3:** User-created templates
+  - Save custom prompts for reuse
+  - Share templates with community
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- **Security risk:** Prompt injection could leak data or manipulate outputs
+- **Quality risk:** Bad prompts → bad artifacts → poor user experience
+- **Start simple:** Validate concept with curated templates first
+- **Gradual expansion:** Add custom prompts once we understand usage patterns
+
+**Implementation Notes:**
+```typescript
+// V2: Sanitize custom prompts
+function sanitizeCustomPrompt(prompt: string): string {
+  // 1. Limit length
+  if (prompt.length > 1000) {
+    throw new Error("Prompt too long");
+  }
+
+  // 2. Remove HTML/script tags
+  const cleaned = DOMPurify.sanitize(prompt, { ALLOWED_TAGS: [] });
+
+  // 3. Prefix with safe template
+  return `
+    You are generating a personalized artifact for a user.
+    The user requested: "${cleaned}"
+
+    Use the following personality profile:
+    ${profileData}
+
+    Generate the requested artifact in markdown format.
+  `;
+}
+
+// 4. Validate LLM output (no <script> tags in response)
+function validateLLMOutput(output: string): boolean {
+  const hasScriptTags = /<script/i.test(output);
+  const hasEventHandlers = /on\w+\s*=/i.test(output);
+  return !hasScriptTags && !hasEventHandlers;
+}
+```
 
 ---
 
-### 10. Statement Generation Strategy
-**Question:** When and how should new statements be generated? (#3)
+### 11. Statement Generation Strategy ✅
+**Question:** When and how should new statements be generated? (Related: CLARIFICATIONS #3)
 
-**Decision:** [PENDING]
+**Decision:** User-triggered only, no automatic generation
 
-**Rationale:** [To be filled]
+**Strategy:**
+- **Initial onboarding:** Generate 20-25 statements (from ChatGPT import or LLM)
+- **After onboarding:** Only user-triggered via "Generate more statements" button
+- **No automatic generation:** Prevents overwhelming users with endless statements
+- **Smart prompts:** Show helpful nudges without auto-generating
+  - "You have 15 validated statements. Add 5 more for better artifacts."
+  - "Review 3 uncertain statements to improve profile accuracy."
 
-**Implementation Notes:** [To be filled]
+**Information-Theoretic Prioritization:**
+```typescript
+// Prioritize statements that reduce most uncertainty
+function getPrioritizedStatements(statements: Statement[]): Statement[] {
+  return statements
+    .filter(s => !s.userValidated && !s.skipped)
+    .sort((a, b) => {
+      // Lower precision = higher uncertainty = higher priority
+      const aUncertainty = 1 - a.precision;
+      const bUncertainty = 1 - b.precision;
+      return bUncertainty - aUncertainty;
+    });
+}
+
+// Suggest statements to review based on uncertainty
+function suggestStatementsToReview(userId: string): Statement[] {
+  return db.statements.findMany({
+    where: {
+      userId,
+      precision: { lt: 0.6 },  // Uncertain
+      credence: { not: 0 },     // Has an opinion
+      userValidated: true
+    },
+    orderBy: { precision: 'asc' },  // Lowest precision first
+    take: 5
+  });
+}
+```
+
+**Rationale:**
+- **Prevents "inbox zero" anxiety:** Users don't feel pressure to validate endless statements
+- **User stays in control:** No surprise statement generation
+- **Quality over quantity:** Better to have 20 well-validated statements than 100 uncertain ones
+- **Focus on high-value updates:** Prioritize reviewing uncertain beliefs for maximum information gain
+
+**Implementation Notes:**
+- "Generate more statements" button shows after user validates 80% of existing statements
+- Generation creates 10 new statements at a time (not 50+)
+- LLM generates statements based on:
+  1. Current personality types (fill gaps)
+  2. Statement categories with few examples
+  3. Contradictions in existing statements (to resolve ambiguity)
 
 ---
 
-### 11. LLM Cost Quotas
-**Question:** What are the per-user and global LLM usage limits? (#32)
+### 12. LLM Cost Quotas ✅
+**Question:** What are the per-user and global LLM usage limits? (Related: CLARIFICATIONS #32)
 
-**Decision:** [PENDING]
+**Decision:** Generous daily limits with no global budget cap
 
-**Rationale:** [To be filled]
+**Confirmed from Decision #2:**
+- **Daily limits per user:**
+  - Artifact generation: 20/day
+  - Statement generation: 10/day
+  - Conversational assessment: 3/day
+- **No monthly caps:** Trust users + monitor usage
+- **No global budget limit:** "Willing to spend as needed"
+- **Cost monitoring:** Track via llm_usage table, dashboard for review
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- User said: "I am always willing to spend tokens. I am willing to spend as many tokens as needed, never a problem"
+- Daily limits prevent abuse without restricting legitimate use
+- No need for complex quota system
+- Monitor costs passively, react if patterns emerge
 
----
-
-### 12. Soft Delete Strategy
-**Question:** Should deletions be soft (recoverable) or hard (permanent)? (#33)
-
-**Decision:** [PENDING]
-
-**Rationale:** [To be filled]
-
-**Implementation Notes:** [To be filled]
-
----
-
-### 13. LLM Response Validation
-**Question:** How should we validate LLM-generated content before showing to users? (#35)
-
-**Decision:** [PENDING]
-
-**Rationale:** [To be filled]
-
-**Implementation Notes:** [To be filled]
+**Implementation Notes:**
+- See Decision #2 for full implementation details
+- Rate limiting enforced at API level (not client-side)
+- Graceful error messages: "You've generated 20 artifacts today. Try again tomorrow."
+- Admin dashboard shows daily/monthly costs per user
 
 ---
 
-### 14. Error Handling Approach
-**Question:** How should errors be communicated to users? (#36)
+### 13. Soft Delete Strategy ✅
+**Question:** Should deletions be soft (recoverable) or hard (permanent)? (Related: CLARIFICATIONS #33)
 
-**Decision:** [PENDING]
+**Decision:** Soft delete for users only, hard delete for statements/artifacts
 
-**Rationale:** [To be filled]
+**Strategy:**
+- **Users:** Soft delete with 30-day recovery, then hard delete
+- **Statements:** Hard delete immediately (easily regenerated)
+- **Artifacts:** Hard delete immediately (easily regenerated)
+- **Account deletion flow:**
+  1. User clicks "Delete Account"
+  2. Show confirmation: "Your account will be deleted in 30 days. You can cancel anytime."
+  3. Account marked as `deleted_at: Date` (soft delete)
+  4. User cannot login but can recover via email link
+  5. After 30 days: Cron job hard deletes account + all data (GDPR compliant)
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- **Prevents accidental user loss:** 30-day recovery window for accounts
+- **Keeps data clean:** Statements/artifacts don't need recovery (regenerate instead)
+- **GDPR compliant:** Right to erasure honored after 30 days
+- **Simple implementation:** No complex recovery UI for statements
+
+**Implementation Notes:**
+```typescript
+// Soft delete user
+async function softDeleteUser(userId: string): Promise<void> {
+  await db.users.update({
+    where: { id: userId },
+    data: {
+      deleted_at: new Date(),
+      email: `deleted_${userId}@example.com`  // Free up email for re-registration
+    }
+  });
+
+  // Send confirmation email with recovery link
+  await sendEmail(user.email, {
+    subject: "Account deletion scheduled",
+    body: `Your account will be deleted in 30 days. Click here to cancel: ${recoveryLink}`
+  });
+}
+
+// Recovery flow
+async function recoverUser(userId: string, token: string): Promise<void> {
+  // Verify token
+  const isValid = verifyRecoveryToken(token);
+  if (!isValid) throw new Error("Invalid recovery token");
+
+  // Restore user
+  await db.users.update({
+    where: { id: userId },
+    data: {
+      deleted_at: null,
+      email: originalEmail  // Restore original email
+    }
+  });
+}
+
+// Cron job: Hard delete after 30 days
+async function hardDeleteExpiredUsers(): Promise<void> {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const expiredUsers = await db.users.findMany({
+    where: {
+      deleted_at: { lte: thirtyDaysAgo }
+    }
+  });
+
+  for (const user of expiredUsers) {
+    // Hard delete cascades to all related data
+    await db.users.delete({ where: { id: user.id } });
+
+    // Delete cached artifacts
+    const cacheKeys = await redis.keys(`artifact:${user.id}:*`);
+    if (cacheKeys.length > 0) {
+      await redis.del(...cacheKeys);
+    }
+
+    // Anonymize LLM usage logs
+    await db.llm_usage.updateMany({
+      where: { userId: user.id },
+      data: { userId: 'DELETED', anonymized: true }
+    });
+  }
+}
+```
+
+**Database Schema:**
+```sql
+ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP NULL;
+CREATE INDEX idx_users_deleted ON users(deleted_at) WHERE deleted_at IS NOT NULL;
+```
+
+---
+
+### 14. LLM Response Validation ✅
+**Question:** How should we validate LLM-generated content before showing to users? (Related: CLARIFICATIONS #35)
+
+**Decision:** Length + format validation with retry logic
+
+**Validation Strategy:**
+- **Length validation:** Min 100 chars, max 10,000 chars for artifacts
+- **Format validation:** Must be valid markdown
+- **Structure validation:** For ChatGPT import, validate JSON structure
+- **Retry logic:** If validation fails, retry once with "fix your response" prompt
+- **No hallucination detection:** Trust LLM for personality content (not factual claims)
+- **No content moderation:** Not needed for personality artifacts
+
+**Rationale:**
+- **Prevents broken UX:** Malformed responses would confuse users
+- **Simple implementation:** No complex validation needed
+- **Trust LLM:** Claude Sonnet 4.5 is reliable for personality content
+- **One retry:** Gives LLM a second chance without excessive retries
+
+**Implementation Notes:**
+```typescript
+// Validate artifact response
+interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  fixPrompt?: string;
+}
+
+function validateArtifactResponse(response: string, type: string): ValidationResult {
+  // 1. Length check
+  if (response.length < 100) {
+    return {
+      valid: false,
+      error: "Response too short",
+      fixPrompt: "Generate a longer, more detailed response (at least 100 characters)."
+    };
+  }
+
+  if (response.length > 10000) {
+    return {
+      valid: false,
+      error: "Response too long",
+      fixPrompt: "Generate a more concise response (under 10,000 characters)."
+    };
+  }
+
+  // 2. Format check (basic markdown validation)
+  const hasHeaders = /^#+\s+/m.test(response);
+  const hasContent = response.trim().length > 0;
+
+  if (!hasHeaders || !hasContent) {
+    return {
+      valid: false,
+      error: "Invalid markdown format",
+      fixPrompt: "Generate a properly formatted markdown response with headers and content."
+    };
+  }
+
+  // 3. Security check (no script tags)
+  if (/<script/i.test(response) || /on\w+\s*=/i.test(response)) {
+    return {
+      valid: false,
+      error: "Security violation",
+      fixPrompt: "Remove any HTML script tags or event handlers from your response."
+    };
+  }
+
+  return { valid: true };
+}
+
+// Artifact generation with retry
+async function generateArtifactWithRetry(userId: string, type: string): Promise<string> {
+  const prompt = constructArtifactPrompt(userId, type);
+
+  // First attempt
+  let response = await llm.generateCompletion(prompt);
+  let validation = validateArtifactResponse(response, type);
+
+  if (validation.valid) {
+    return response;
+  }
+
+  // Retry once with fix prompt
+  console.warn('Invalid LLM response, retrying...', validation.error);
+  const retryPrompt = `${prompt}\n\nIMPORTANT: ${validation.fixPrompt}`;
+
+  response = await llm.generateCompletion(retryPrompt);
+  validation = validateArtifactResponse(response, type);
+
+  if (!validation.valid) {
+    throw new Error(`LLM validation failed after retry: ${validation.error}`);
+  }
+
+  return response;
+}
+
+// ChatGPT import validation
+interface ChatGPTImport {
+  mbti: { type: string; confidence: number };
+  enneagram: { type: string; confidence: number };
+  big5: { [key: string]: number };
+  statements: Array<{ text: string; credence: number }>;
+}
+
+function validateChatGPTImport(response: string): ChatGPTImport | null {
+  try {
+    // Try parsing as JSON
+    const data = JSON.parse(response);
+
+    // Validate structure
+    if (!data.mbti || !data.enneagram || !data.big5 || !data.statements) {
+      return null;
+    }
+
+    // Validate ranges
+    if (data.mbti.confidence < 0 || data.mbti.confidence > 1) return null;
+    if (data.statements.length < 5) return null;
+
+    return data as ChatGPTImport;
+  } catch (error) {
+    // Not JSON, try parsing as text using our own LLM
+    return null;
+  }
+}
+```
+
+---
+
+### 15. Error Handling Approach ✅
+**Question:** How should errors be communicated to users? (Related: CLARIFICATIONS #36)
+
+**Decision:** Specific, actionable error messages with appropriate UI patterns
+
+**Error Communication Strategy:**
+- **Toast notifications:** Transient errors (network, temporary failures)
+- **Modal dialogs:** Critical errors (data loss, auth failure, permanent blocks)
+- **Inline validation:** Form errors (invalid input, field-level)
+- **Banner notifications:** System-wide issues (maintenance, API down)
+
+**Error Message Templates:**
+```typescript
+const ERROR_MESSAGES = {
+  // LLM failures
+  LLM_API_FAILURE: {
+    title: "Generation failed",
+    message: "Our AI service is temporarily unavailable. Try again in a few minutes.",
+    action: "Retry",
+    type: "toast"
+  },
+
+  // Rate limiting
+  RATE_LIMIT: {
+    title: "Daily limit reached",
+    message: "You've generated 20 artifacts today. Try again tomorrow.",
+    action: "View Usage",
+    type: "modal"
+  },
+
+  // Validation errors
+  INVALID_INPUT: {
+    title: "Invalid input",
+    message: "Statement must be 10-500 characters.",
+    action: "Fix",
+    type: "inline"
+  },
+
+  // Network errors
+  NETWORK_ERROR: {
+    title: "Connection lost",
+    message: "Check your internet connection and try again.",
+    action: "Retry",
+    type: "toast"
+  },
+
+  // Server errors
+  SERVER_ERROR: {
+    title: "Something went wrong",
+    message: "We're working on it. Try again in a few minutes.",
+    action: "Dismiss",
+    type: "toast"
+  },
+
+  // Auth errors
+  AUTH_EXPIRED: {
+    title: "Session expired",
+    message: "Your session has expired. Please sign in again.",
+    action: "Sign In",
+    type: "modal"
+  },
+
+  // Data errors
+  NOT_FOUND: {
+    title: "Not found",
+    message: "The artifact you're looking for doesn't exist.",
+    action: "Go to Dashboard",
+    type: "banner"
+  }
+};
+```
+
+**Implementation Pattern:**
+```typescript
+// Error handling wrapper
+async function handleApiCall<T>(
+  apiCall: () => Promise<T>,
+  errorContext: string
+): Promise<T> {
+  try {
+    return await apiCall();
+  } catch (error) {
+    if (error.response?.status === 429) {
+      showModal(ERROR_MESSAGES.RATE_LIMIT);
+    } else if (error.response?.status === 401) {
+      showModal(ERROR_MESSAGES.AUTH_EXPIRED);
+    } else if (error.code === 'ECONNABORTED') {
+      showToast(ERROR_MESSAGES.NETWORK_ERROR);
+    } else if (error.response?.status >= 500) {
+      showToast(ERROR_MESSAGES.SERVER_ERROR);
+    } else {
+      // Log unexpected errors to Sentry
+      Sentry.captureException(error, { context: errorContext });
+      showToast(ERROR_MESSAGES.SERVER_ERROR);
+    }
+
+    throw error;  // Re-throw for caller to handle if needed
+  }
+}
+
+// Usage
+const artifact = await handleApiCall(
+  () => api.generateArtifact(userId, type),
+  'artifact_generation'
+);
+```
+
+**User-Friendly Error Examples:**
+```
+❌ Bad: "Error 429: Too Many Requests"
+✅ Good: "You've generated 20 artifacts today. Try again tomorrow at 12:00 AM."
+
+❌ Bad: "ECONNREFUSED"
+✅ Good: "Connection lost. Check your internet and try again."
+
+❌ Bad: "Validation failed"
+✅ Good: "Statement must be 10-500 characters (currently 8 characters)"
+
+❌ Bad: "LLM API error: timeout"
+✅ Good: "Generation took too long and timed out. Try again with a simpler prompt."
+```
+
+**Rationale:**
+- **User-centric:** Technical jargon replaced with clear language
+- **Actionable:** Always provide next step (Retry, Fix, View, etc.)
+- **Appropriate UI:** Match severity to UI pattern (toast vs modal)
+- **Informative:** Enough detail to understand what went wrong
+
+**Implementation Notes:**
+- Use React Toast library (react-hot-toast or sonner)
+- Modal for blocking errors, toast for non-blocking
+- Include error tracking ID for support debugging
+- Retry button includes exponential backoff (2s, 4s, 8s)
 
 ---
 
 ## Medium Priority Decisions (Decide During Development)
 
-[Questions 15-21 - To be added as needed]
+### 16. Profile Update Mechanism ✅
+**Question:** How does the system update personality distributions when users agree/disagree with statements? (Related: CLARIFICATIONS #2)
+
+**Decision:** Manual re-evaluation only, statements don't auto-update personality types
+
+**Strategy:**
+- Statements are informational only
+- Do NOT automatically update MBTI/Enneagram/Big5 distributions when user validates statements
+- Provide "Re-evaluate personality types" button that:
+  1. Analyzes all validated statements
+  2. Uses LLM to suggest updated distributions
+  3. Shows "Your profile analysis suggests: INTJ (85%) vs previous INTJ (75%)"
+  4. User approves or rejects suggested changes
+- Prevents confusing auto-updates that user doesn't understand
+
+**Rationale:**
+- Less confusing: User sees their personality types stay stable
+- User control: Explicit re-evaluation vs mysterious auto-changes
+- Prevents drift: Statements don't gradually shift personality types without awareness
 
 ---
 
-## Low Priority Decisions (Can Decide Post-MVP)
+### 17. Statement Deduplication ✅
+**Question:** How to handle similar/duplicate statements? (Related: CLARIFICATIONS #15)
 
-[Questions 22-48 - To be deferred]
+**Decision:** No automated deduplication for MVP, manual removal only
+
+**Strategy:**
+- No LLM similarity checking (adds latency + cost)
+- User manually deletes duplicates if they notice
+- V2+: Show "similar statements" warning using embeddings
+
+**Rationale:**
+- **MVP simplicity:** Not a critical problem initially
+- **Low frequency:** Users won't create many duplicates manually
+- **Easy workaround:** User can delete duplicates themselves
+- **Future enhancement:** Add embeddings-based similarity in V2
 
 ---
 
-## Summary of Key Decisions
+### 18. Artifact Versioning ✅
+**Question:** Should we keep version history of artifacts? (Related: CLARIFICATIONS #7)
+
+**Decision:** Single latest version only for MVP
+
+**Strategy:**
+- Each artifact type has one current version
+- Regenerating overwrites previous version
+- No version history stored
+- V2+: Add versioning with "View history" feature
+
+**Rationale:**
+- **Simpler data model:** No versions table needed
+- **Lower storage costs:** Don't store 10 versions of each artifact
+- **Sufficient for MVP:** Users care about current artifact, not history
+- **Easy to add later:** Can add versions table in V2 without major refactor
+
+---
+
+### 19. Big5 Score Input ✅
+**Question:** How do users provide/update Big5 scores? (Related: CLARIFICATIONS #9)
+
+**Decision:** LLM-inferred initially, user can manually adjust via sliders
+
+**Strategy:**
+- Initial assessment: LLM infers Big5 from MBTI + Enneagram + statements
+- Profile page: Show sliders for each trait (0-100)
+- User can adjust sliders manually
+- Each adjustment updates precision (user-adjusted = high precision)
+- No separate Big5 questionnaire
+
+**Rationale:**
+- **Avoids long questionnaire:** Big5 tests are 44-120 questions
+- **Reasonable estimates:** LLM can infer decent estimates from other data
+- **User refinement:** Sliders let users correct inaccurate estimates
+- **Consistency:** Matches our "LLM + user validation" pattern
+
+---
+
+### 20. Database Transaction Strategy ✅
+**Question:** Which operations should be wrapped in transactions? (Related: CLARIFICATIONS #34)
+
+**Decision:** Use transactions for multi-step critical operations
+
+**Operations requiring transactions:**
+- User creation + profile initialization + initial statements
+- Artifact generation + fingerprint + caching + storage
+- Batch statement updates
+- Profile re-evaluation + distribution updates
+- Account deletion + cascade deletes
+
+**Implementation:**
+```typescript
+// User creation transaction
+await db.transaction(async (tx) => {
+  const user = await tx.users.create({ data: userData });
+  await tx.personalityProfiles.create({ data: { userId: user.id, ...profileData } });
+  await tx.personalityStatements.createMany({ data: statements });
+});
+
+// Artifact generation transaction
+await db.transaction(async (tx) => {
+  const artifact = await tx.artifacts.create({ data: artifactData });
+  await redis.set(`artifact:${userId}:${type}:${hash}`, artifact.content, { ex: 2592000 });
+});
+```
+
+**Rationale:**
+- **Data consistency:** Multi-step operations either fully succeed or fully fail
+- **No partial state:** Prevent orphaned records
+- **Simple pattern:** PostgreSQL transactions are reliable and performant
+
+---
+
+### 21. Monitoring & Observability ✅
+**Question:** What metrics should be monitored? (Related: CLARIFICATIONS #37)
+
+**Decision:** Basic logging + simple metrics for MVP, no alerts
+
+**MVP Monitoring:**
+- **Logging:** Winston or Pino for structured logs
+- **Metrics collected:**
+  - API response times (p50, p95, p99)
+  - Error rates by endpoint
+  - LLM API latency and errors
+  - Cache hit rate
+  - Database query performance
+  - Active users (daily/weekly/monthly)
+  - LLM costs per user
+- **Storage:** Logs to file + Railway built-in logs
+- **Visualization:** Simple dashboard (query database directly)
+- **No alerts:** Manual review of logs/metrics
+
+**V2+ Enhancements:**
+- Add Sentry for error tracking
+- Add Grafana dashboards
+- Set up alerts for critical thresholds
+- Add distributed tracing (OpenTelemetry)
+
+**Rationale:**
+- **Start simple:** Don't over-engineer observability for MVP
+- **Railway provides basics:** Built-in logs and metrics
+- **Manual review sufficient:** Low user count means manual monitoring works
+- **Easy to enhance:** Can add Sentry/Grafana later without changing code
+
+---
+
+### 22. Database Backup & Recovery ✅
+**Question:** What's the backup and disaster recovery strategy? (Related: CLARIFICATIONS #38)
+
+**Decision:** Daily automated backups via managed database provider
+
+**Strategy:**
+- **Rely on Railway PostgreSQL addon:** Automatic daily backups
+- **Retention:** 30-day retention (Railway default)
+- **Recovery:** Use Railway dashboard to restore from backup
+- **No custom backup logic:** Trust managed service
+- **V1 (SQLite):** Manual backup of .db file
+
+**Rationale:**
+- **Managed service reliability:** Railway handles backups automatically
+- **Cost-effective:** Included in managed PostgreSQL pricing
+- **Simple recovery:** One-click restore via dashboard
+- **Sufficient for MVP:** 30-day retention covers accidental deletion scenarios
+
+---
+
+### 23. Testing Strategy ✅
+**Question:** What testing approach should we use? (Related: DESIGN_CRITIQUE.md testing gaps)
+
+**Decision:** Fast unit tests for all functionality, run on every change
+
+**Testing Requirements:**
+- **Unit tests:** Fast (<1s total), run frequently during development
+- **Test coverage:** All core logic (profile calculations, deviation, validation, hashing)
+- **Run on save:** Tests execute automatically when Claude makes changes
+- **CI integration:** Tests run on git push (GitHub Actions)
+- **No slow tests in unit suite:** Integration/E2E tests separate
+
+**Test Stack:**
+- **Framework:** Vitest (faster than Jest, ESM-native)
+- **Assertions:** Vitest built-in matchers
+- **Mocking:** Vitest mocks for LLM/database
+- **Coverage:** vitest --coverage (target: >80%)
+
+**What to Test:**
+```typescript
+// 1. Profile hash calculation (deterministic)
+describe('calculateProfileHash', () => {
+  it('produces same hash for identical profiles', () => {
+    const profile1 = createTestProfile();
+    const profile2 = createTestProfile();
+    expect(calculateProfileHash(profile1)).toBe(calculateProfileHash(profile2));
+  });
+
+  it('produces different hash when statement changes', () => {
+    const profile1 = createTestProfile();
+    const profile2 = { ...profile1, statements: [...profile1.statements, newStatement] };
+    expect(calculateProfileHash(profile1)).not.toBe(calculateProfileHash(profile2));
+  });
+});
+
+// 2. Deviation calculation (precision-weighted)
+describe('calculateDeviation', () => {
+  it('returns 0 for identical fingerprints', () => {
+    const fingerprint = createTestFingerprint();
+    expect(calculateDeviation(fingerprint, fingerprint)).toBe(0);
+  });
+
+  it('weights changes by precision', () => {
+    const old = createFingerprint({ mbti: [{ type: 'INTJ', prob: 0.8, precision: 0.9 }] });
+    const new = createFingerprint({ mbti: [{ type: 'INTJ', prob: 0.7, precision: 0.9 }] });
+    const deviation = calculateDeviation(old, new);
+    expect(deviation).toBeGreaterThan(0);
+  });
+});
+
+// 3. Distribution normalization
+describe('validateDistribution', () => {
+  it('accepts distributions that sum to 1.0', () => {
+    const dist = [{ type: 'INTJ', prob: 0.6 }, { type: 'INTP', prob: 0.4 }];
+    expect(() => validateDistribution(dist)).not.toThrow();
+  });
+
+  it('auto-normalizes distributions within 5% of 1.0', () => {
+    const dist = [{ type: 'INTJ', prob: 0.6 }, { type: 'INTP', prob: 0.42 }];  // sum = 1.02
+    validateDistribution(dist);
+    expect(dist[0].prob + dist[1].prob).toBeCloseTo(1.0);
+  });
+
+  it('rejects distributions far from 1.0', () => {
+    const dist = [{ type: 'INTJ', prob: 0.3 }, { type: 'INTP', prob: 0.3 }];  // sum = 0.6
+    expect(() => validateDistribution(dist)).toThrow();
+  });
+});
+
+// 4. Statement weighting (emphasis)
+describe('calculateStatementWeight', () => {
+  it('applies 2x multiplier for emphasized statements', () => {
+    const normal = { credence: 1, precision: 0.8, emphasized: false };
+    const emphasized = { credence: 1, precision: 0.8, emphasized: true };
+    expect(calculateStatementWeight(emphasized)).toBe(calculateStatementWeight(normal) * 2);
+  });
+});
+
+// 5. Input validation
+describe('validateStatement', () => {
+  it('accepts valid statements', () => {
+    expect(() => validateStatement({ text: 'I prefer working alone', credence: 1 })).not.toThrow();
+  });
+
+  it('rejects statements under 10 chars', () => {
+    expect(() => validateStatement({ text: 'short', credence: 1 })).toThrow();
+  });
+
+  it('rejects statements over 500 chars', () => {
+    expect(() => validateStatement({ text: 'x'.repeat(501), credence: 1 })).toThrow();
+  });
+});
+
+// 6. Share ID generation
+describe('generateShareId', () => {
+  it('generates 8-character IDs', () => {
+    const id = generateShareId();
+    expect(id).toHaveLength(8);
+  });
+
+  it('generates unique IDs', () => {
+    const ids = new Set(Array.from({ length: 1000 }, () => generateShareId()));
+    expect(ids.size).toBe(1000);  // All unique
+  });
+});
+```
+
+**Test Script Setup:**
+```json
+{
+  "scripts": {
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "test:ui": "vitest --ui"
+  }
+}
+```
+
+**Watch Mode for Claude:**
+```bash
+# Claude runs this in background terminal
+npm run test:watch
+# Tests auto-run on file save
+```
+
+**Rationale:**
+- **Fast feedback:** Unit tests run in <1s, don't slow down development
+- **Confidence:** Test core logic prevents regressions
+- **Documentation:** Tests serve as examples of how functions work
+- **Claude-friendly:** Fast tests mean Claude can verify changes immediately
+
+**Not Tested (Deferred to V2):**
+- Integration tests (database + API)
+- E2E tests (full user flows)
+- Visual regression tests
+- Performance tests
+
+---
+
+## Low Priority Decisions (Defer to Post-MVP)
+
+### 24-48. Deferred Features ✅
+
+The following questions are deferred to post-MVP with sensible defaults for V1:
+
+**24. Mobile Interaction Patterns (#23):** Swipe for agree/disagree (Tinder-style) + tap to expand
+**25. Statement Presentation Order (#21):** Category-grouped, sorted by credence within category
+**26. Visual Design Style (#22):** Minimalist/modern (like Notion, Linear)
+**27. Artifact Display Format (#24):** Markdown rendered as HTML, read-only for MVP
+**28. Profile Completeness Indicator (#25):** Yes - percentage based on validated types + statements
+**29. Statement Privacy & Sharing (#8):** Fully private for MVP (covered by Decision #7 for artifacts)
+**30. Real-time Updates (#13):** No real-time for MVP, user refreshes to see updates
+**31. File Storage for Artifacts (#14):** Markdown/HTML only, add PDF/DOCX export in V2
+**32. Monetization Strategy (#16):** Fully free for MVP, evaluate pricing later
+**33. Data Retention (#17):** Keep indefinitely, provide manual delete option (covered by Decision #13)
+**34. Analytics & Telemetry (#18):** Basic analytics via PostgreSQL queries, no third-party for MVP
+**35. Onboarding Flow (#19):** Multi-path assessment (covered by Decision #1)
+**36. Frontend State Management (#12):** React Query + Context (no Redux needed for MVP)
+**37. API Versioning (#39):** No versioning for MVP, add `/api/v1/` in V2 when stabilizing
+**38. Accessibility Level (#40):** Basic keyboard navigation + semantic HTML, work toward WCAG 2.1 AA in V2
+**39. Loading States (#41):** Skeleton screens for lists, spinners for actions, progress bars for LLM generation
+**40. Email Notifications (#42):** No emails for MVP, add transactional emails in V2
+**41. Statement Weighting (#43):** Emphasis feature (covered by Decision #3), no other weighting needed
+**42. Profile Snapshot Versioning (#44):** Store full snapshot in artifact for MVP, optimize in V2
+**43. Multi-device Sessions (#45):** Multiple sessions allowed, no management UI for MVP
+**44. GDPR Export (#46):** "Delete Account" button for MVP (covered by Decision #13), add data export in V2
+**45. Personality Framework Bias (#47):** Add disclaimer, focus on user-validated statements as ground truth
+**46. Artifact Regeneration Strategy (#48):** Invalidate cache, overwrite existing artifact (covered by Decision #4)
+**47. Statement Categorization (#3.1):** Optional LLM-suggested category, user can edit, default to "OTHER"
+**48. Statement Source Tracking (#3.2):** Display as subtle badge, use for default precision values
+
+**Rationale for Batch Deferral:**
+- **MVP focus:** These don't block core functionality
+- **User feedback needed:** Better to ship MVP and learn what users actually want
+- **Easy to add later:** None of these require major architectural changes
+- **Avoid over-engineering:** Don't build features users might not need
+
+---
+
+## Summary: All 48 Questions Decided ✅
+
+**Status:** All clarification questions resolved (23 explicit decisions + 25 deferred with defaults)
 
 **Technology Stack:**
-- Frontend: [TBD]
-- Backend: [TBD]
-- Database: [TBD]
-- LLM Provider: [TBD]
+- Frontend: React + TypeScript + Vite + TailwindCSS + React Query
+- Backend: Express + TypeScript + SQLite (V1) → PostgreSQL (V2+)
+- Database: SQLite (V1), PostgreSQL (V2+), Redis for caching
+- LLM Provider: Claude Sonnet 4.5 (primary), GPT-4o (fallback), with abstraction layer
+- Testing: Vitest for fast unit tests (<1s)
+- Deployment: Railway.app (backend + PostgreSQL + Redis)
 
 **Cost Budget:**
-- Monthly LLM budget: [TBD]
-- Expected cost per user: [TBD]
+- Daily LLM limits: 20 artifacts, 10 statements, 3 assessments per user
+- No monthly cap: "Willing to spend as needed"
+- Monitoring: Track via llm_usage table, manual review
 
 **Security:**
-- JWT strategy: [TBD]
-- Input validation: [TBD]
+- JWT: 8hr access tokens, 30day refresh tokens with rotation
+- Input validation: 500 char statements, 1000 char prompts, Zod schemas
+- Rate limiting: Daily limits prevent abuse
+- Soft delete: 30-day recovery for users, hard delete for statements/artifacts
 
 **Performance:**
-- Caching strategy: [TBD]
-- Expected scale: [TBD]
+- Caching: Fingerprint-based with deviation detection (SHA-256 profile hash)
+- Deviation thresholds: 0.15 (notify), 0.30 (suggest regen), 0.50 (outdated)
+- Expected scale: 100-1000 users initially, design for 10K+
+
+**Core Features (23 Decisions):**
+1. Multi-path onboarding (ChatGPT prompt recommended)
+2. Claude Sonnet 4.5 + LLM abstraction
+3. Binary credence + precision + emphasis
+4. Fingerprint-based caching with deviation detection
+5. Integrated profile hash algorithm
+6. 8hr/30day JWT with rotation
+7. Shareable artifacts with opaque links
+8. Generous validation limits
+9. Probability distribution normalization
+10. Custom prompts (V1: templates only, V2+: custom)
+11. User-triggered statement generation only
+12. Confirmed cost quotas (Decision #2)
+13. Soft delete for users, hard for statements/artifacts
+14. LLM response validation (length + format + retry)
+15. Specific error messages with actions
+16. Manual profile re-evaluation only
+17. No statement deduplication for MVP
+18. Single artifact version (no history for MVP)
+19. LLM-inferred Big5 + user-adjustable sliders
+20. Database transactions for critical operations
+21. Basic monitoring (logs + metrics, no alerts)
+22. Daily backups via Railway PostgreSQL
+23. Fast unit tests with Vitest (run on every change)
+
+**Deferred to Post-MVP (25 Questions):**
+24-48. Mobile patterns, UI polish, monetization, analytics, accessibility, real-time updates, email, versioning, etc. - All have sensible defaults, easy to add later.
+
+---
+
+## Next Steps
+
+All decisions are now documented. Ready to:
+1. **Fold all decisions into DESIGN.md**
+2. **Update CLARIFICATIONS_NEEDED.md to mark all as resolved**
+3. **Remove DECISIONS.md** (no longer needed once integrated)
+4. **Commit final consolidated design**
