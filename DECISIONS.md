@@ -370,25 +370,287 @@ function suggestStatementsToReview(userId: string): Statement[] {
 
 ---
 
-### 4. Cache Invalidation Logic
+### 4. Cache Invalidation Logic ✅
 **Question:** When should cached artifacts be invalidated? (#5, #28)
 
-**Decision:** [PENDING]
+**Decision:** Fingerprint-based deviation detection with user-triggered incremental regeneration
 
-**Rationale:** [To be filled]
+**Core Strategy:**
+- Store personality fingerprint with each artifact (snapshot at generation time)
+- Calculate deviation between current and artifact fingerprints
+- Notify user when deviation exceeds threshold
+- User decides when to regenerate (not automatic)
+- For multiple artifacts, offer background batch regeneration
+- Use diff-aware prompting for efficient incremental updates
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- Efficient: Only regenerate when personality meaningfully changes
+- User control: No surprise LLM costs, user decides when to refresh
+- Intelligent updates: LLM receives context about what changed
+- Insightful: User sees how profile evolution affects recommendations
+- Scalable: Background processing for many artifacts
+
+**Implementation Notes:**
+
+**Personality Fingerprint (stored with each artifact):**
+```typescript
+interface PersonalityFingerprint {
+  timestamp: Date;
+
+  // MBTI distribution with precision
+  mbti: {
+    type: MBTIType;
+    probability: number;  // 0-1
+    precision: number;    // 0-1
+  }[];
+
+  // Enneagram distribution with precision
+  enneagram: {
+    type: EnneagramType;
+    probability: number;
+    precision: number;
+  }[];
+
+  // Big5 scores with precision
+  big5: {
+    trait: string;  // 'openness', 'conscientiousness', etc.
+    score: number;  // 0-100
+    precision: number;  // 0-1
+  }[];
+
+  // Key statements (high credence, high precision)
+  keyStatements: {
+    id: string;
+    text: string;
+    credence: number;
+    precision: number;
+  }[];
+
+  // Hash for quick comparison
+  hash: string;
+}
+
+interface Artifact {
+  // ... existing fields
+  personalityFingerprint: PersonalityFingerprint;
+  needsRegeneration: boolean;  // Computed field
+  deviationScore: number;      // Computed field
+}
+```
+
+**Deviation Calculation:**
+```typescript
+function calculateDeviation(
+  oldFingerprint: PersonalityFingerprint,
+  currentProfile: PersonalityProfile
+): number {
+  let totalDeviation = 0;
+  let weightSum = 0;
+
+  // MBTI deviation (weighted by precision)
+  for (const oldMbti of oldFingerprint.mbti) {
+    const currentMbti = currentProfile.mbtiDistribution.find(m => m.type === oldMbti.type);
+    if (currentMbti) {
+      const probChange = Math.abs(currentMbti.probability - oldMbti.probability);
+      const weight = (oldMbti.precision + currentMbti.precision) / 2;
+      totalDeviation += probChange * weight;
+      weightSum += weight;
+    }
+  }
+
+  // Enneagram deviation (same logic)
+  for (const oldEnneagram of oldFingerprint.enneagram) {
+    const currentEnneagram = currentProfile.enneagramDistribution.find(e => e.type === oldEnneagram.type);
+    if (currentEnneagram) {
+      const probChange = Math.abs(currentEnneagram.probability - oldEnneagram.probability);
+      const weight = (oldEnneagram.precision + currentEnneagram.precision) / 2;
+      totalDeviation += probChange * weight;
+      weightSum += weight;
+    }
+  }
+
+  // Big5 deviation (trait score changes)
+  for (const oldTrait of oldFingerprint.big5) {
+    const currentScore = currentProfile.big5Scores[oldTrait.trait];
+    const currentPrecision = currentProfile.big5Scores[`${oldTrait.trait}_precision`];
+    const scoreChange = Math.abs(currentScore - oldTrait.score) / 100;  // Normalize to 0-1
+    const weight = (oldTrait.precision + currentPrecision) / 2;
+    totalDeviation += scoreChange * weight;
+    weightSum += weight;
+  }
+
+  // Statement deviation (key statements changed)
+  const currentStatements = getCurrentKeyStatements(currentProfile);
+  for (const oldStmt of oldFingerprint.keyStatements) {
+    const currentStmt = currentStatements.find(s => s.id === oldStmt.id);
+    if (currentStmt) {
+      const credenceChange = Math.abs(currentStmt.credence - oldStmt.credence);
+      const weight = (oldStmt.precision + currentStmt.precision) / 2;
+      totalDeviation += credenceChange * weight;
+      weightSum += weight;
+    } else {
+      // Statement removed or skipped - high deviation
+      totalDeviation += oldStmt.precision;
+      weightSum += oldStmt.precision;
+    }
+  }
+
+  return weightSum > 0 ? totalDeviation / weightSum : 0;  // Normalized 0-1
+}
+```
+
+**Deviation Thresholds:**
+```typescript
+const DEVIATION_THRESHOLDS = {
+  NOTIFY: 0.15,      // Show "Profile changed" badge
+  SUGGEST: 0.30,     // Suggest regeneration
+  SIGNIFICANT: 0.50  // Mark as significantly outdated
+};
+```
+
+**User Notification UI:**
+```
+┌─────────────────────────────────────────────┐
+│ 📊 Your Ideal Workday Guide                │
+│                                             │
+│ ⚠️ Your profile has changed significantly  │
+│    since this was generated                │
+│                                             │
+│ Major changes:                              │
+│ • MBTI shifted from INTJ → INTP (+25%)    │
+│ • Openness increased by 15 points          │
+│ • 3 key beliefs updated                    │
+│                                             │
+│ [View Changes] [Regenerate Now] [Dismiss]  │
+└─────────────────────────────────────────────┘
+```
+
+**Batch Background Regeneration:**
+```typescript
+// User clicks "Update all outdated artifacts"
+async function scheduleArtifactRegeneration(userId: string) {
+  const outdatedArtifacts = await db.artifacts.findMany({
+    where: {
+      userId,
+      deviationScore: { gt: DEVIATION_THRESHOLDS.SUGGEST }
+    },
+    orderBy: { deviationScore: 'desc' }  // Most outdated first
+  });
+
+  // Queue regeneration jobs
+  for (const artifact of outdatedArtifacts) {
+    await queue.add('regenerate-artifact', {
+      userId,
+      artifactId: artifact.id,
+      mode: 'incremental'  // Use diff-aware prompting
+    });
+  }
+
+  return { queued: outdatedArtifacts.length };
+}
+```
+
+**Diff-Aware Regeneration Prompt:**
+```typescript
+const diffAwarePrompt = `
+You previously generated a "${artifactType}" for this user.
+
+PREVIOUS ARTIFACT (generated ${daysAgo} days ago):
+${previousArtifactContent}
+
+PERSONALITY CHANGES SINCE THEN:
+${generateChangeSummary(oldFingerprint, currentFingerprint)}
+
+Examples of changes:
+- MBTI: Was 80% INTJ, now 60% INTJ / 40% INTP (exploring more possibilities)
+- Big5 Openness: Increased from 65 → 80 (more open to new experiences)
+- New belief: "I thrive in collaborative environments" (credence: 0.8, precision: 0.9)
+- Updated belief: "I prefer working alone" changed from 0.8 → 0.3
+
+TASK:
+Update the artifact to reflect these personality changes.
+1. Identify which sections need updating based on the changes
+2. Explain what changed and why (brief commentary)
+3. Provide the updated artifact
+
+Format:
+## What Changed
+[Brief explanation of how personality shifts affect recommendations]
+
+## Updated Artifact
+[Full updated content in markdown]
+`;
+```
+
+**Profile Hash Algorithm (for cache keys):**
+```typescript
+function calculateProfileHash(profile: PersonalityProfile): string {
+  const fingerprint = createFingerprint(profile);
+
+  // Include only validated, non-skipped statements with |credence| > 0
+  const keyStatements = profile.statements
+    .filter(s => s.userValidated && !s.skipped && Math.abs(s.credence) > 0)
+    .sort((a, b) => a.id.localeCompare(b.id))  // Deterministic order
+    .map(s => `${s.id}:${s.credence}:${s.precision}`);
+
+  const hashInput = {
+    mbti: fingerprint.mbti,
+    enneagram: fingerprint.enneagram,
+    big5: fingerprint.big5,
+    statements: keyStatements
+  };
+
+  return sha256(JSON.stringify(hashInput));
+}
+```
+
+**Cache Key Format:**
+```
+artifact:{userId}:{artifactType}:{profileHash}
+```
+
+**Database Schema Updates:**
+```sql
+ALTER TABLE artifacts
+  ADD COLUMN personality_fingerprint JSONB NOT NULL,
+  ADD COLUMN deviation_score DECIMAL(3,2) DEFAULT 0,
+  ADD COLUMN needs_regeneration BOOLEAN DEFAULT FALSE;
+
+-- Index for finding outdated artifacts
+CREATE INDEX idx_artifacts_outdated
+  ON artifacts(user_id, deviation_score DESC)
+  WHERE needs_regeneration = TRUE;
+```
+
+**Benefits:**
+- **Efficient**: Incremental updates vs full regeneration
+- **Insightful**: Users see how personality evolution affects outputs
+- **Cost-effective**: Only regenerate when meaningful deviation occurs
+- **User control**: No surprise LLM costs
+- **Scalable**: Background batch processing
+- **Smart prompting**: LLM gets context about what changed
 
 ---
 
-### 5. Profile Hash Algorithm
+### 5. Profile Hash Algorithm ✅
 **Question:** How should the profile hash be calculated for cache keys? (#28)
 
-**Decision:** [PENDING]
+**Decision:** Covered in #4 - Fingerprint-based hashing with validated statements + precision
 
-**Rationale:** [To be filled]
+**See Decision #4 for full implementation.** Key points:
 
-**Implementation Notes:** [To be filled]
+- Hash includes: MBTI distribution, Enneagram distribution, Big5 scores, validated statements
+- Statements included if: userValidated=true, skipped=false, |credence| > 0
+- Format: `sha256(JSON.stringify({mbti, enneagram, big5, statements}))`
+- Statements sorted by ID for deterministic hashing
+- Statement hash format: `id:credence:precision`
+- Cache key: `artifact:{userId}:{artifactType}:{profileHash}`
+
+**Rationale:**
+- Deterministic: Same profile always produces same hash
+- Precise: Includes precision term for nuanced comparison
+- Efficient: Excludes skipped/neutral statements
+- Secure: SHA-256 prevents collisions
 
 ---
 
