@@ -881,25 +881,160 @@ async function cleanupExpiredTokens(): Promise<number> {
 
 ---
 
-### 7. Input Validation Limits
-**Question:** What are the limits for user-provided text? (#31)
+### 7. Shareable Artifacts ✅
+**Question:** Should artifacts be shareable? (Related: #8)
 
-**Decision:** [PENDING]
+**Decision:** Yes - each artifact gets a unique opaque share link
 
-**Rationale:** [To be filled]
+**Core Features:**
+- Every artifact has unique random share ID (not UUID)
+- Public route `/share/{shareId}` accessible without auth
+- Share button on each artifact
+- Track view counts on shared artifacts
+- Privacy toggle (public/private per artifact)
 
-**Implementation Notes:** [To be filled]
+**Implementation:** See full details in separate decision note below.
+
+**Rationale:**
+- Viral growth: Users share insights with friends
+- Collaboration: Share guides with team/therapist
+- Portfolio: Showcase personality insights
+- Network effects: Recipients → sign up
+- Trust building: Transparency in recommendations
 
 ---
 
-### 8. Personality Distribution Normalization
+### 8. Input Validation Limits ✅
+**Question:** What are the limits for user-provided text? (#31)
+
+**Decision:** Generous limits with soft caps
+
+**Limits:**
+- **Statement text:** 500 characters (1-2 sentences)
+- **Custom artifact prompt:** 1000 characters
+- **Display name:** 100 characters
+- **Statements per user:** 1000 (soft cap, warn at 500)
+- **Artifacts per user:** 200 (soft cap, warn at 100)
+
+**Rationale:**
+- 500 chars for statements: Enough for nuance, not essays
+- 1000 chars for prompts: Room for detailed custom requests
+- Soft caps with warnings: Prevent abuse without hard limits
+- High limits: Trust users, no artificial constraints
+
+**Implementation:**
+```typescript
+const VALIDATION_LIMITS = {
+  statement: {
+    minLength: 10,
+    maxLength: 500,
+    pattern: /^[\w\s\p{P}]+$/u  // Alphanumeric + punctuation
+  },
+  customPrompt: {
+    minLength: 20,
+    maxLength: 1000
+  },
+  displayName: {
+    minLength: 2,
+    maxLength: 100
+  },
+  statementsPerUser: {
+    softCap: 500,  // Warn user
+    hardCap: 1000  // Reject
+  },
+  artifactsPerUser: {
+    softCap: 100,
+    hardCap: 200
+  }
+};
+
+// Validation schema (Zod)
+const StatementSchema = z.object({
+  statement: z.string()
+    .min(10, 'Statement too short')
+    .max(500, 'Statement must be under 500 characters')
+    .regex(/^[\w\s\p{P}]+$/u, 'Invalid characters'),
+  credence: z.number().min(-1).max(1),
+  precision: z.number().min(0).max(1),
+  emphasized: z.boolean().optional()
+});
+```
+
+---
+
+### 9. Personality Distribution Normalization ✅
 **Question:** Should personality type distributions be required to sum to 1.0? (#29)
 
-**Decision:** [PENDING]
+**Decision:** Yes - enforce probability distribution with validation
 
-**Rationale:** [To be filled]
+**Rules:**
+- MBTI probabilities must sum to 1.0 (±0.01 tolerance)
+- Enneagram probabilities must sum to 1.0 (±0.01 tolerance)
+- Each type probability: 0.0 to 1.0
+- Auto-normalize if close (within 5% of 1.0)
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- Probabilities that don't sum to 1.0 are mathematically invalid
+- Makes deviation calculation accurate
+- Prevents data integrity issues
+- Auto-normalization handles rounding errors
+
+**Implementation:**
+```typescript
+interface PersonalityDistribution {
+  type: string;
+  probability: number;  // 0-1
+  precision: number;    // 0-1
+}
+
+function validateDistribution(dist: PersonalityDistribution[]): boolean {
+  const sum = dist.reduce((acc, d) => acc + d.probability, 0);
+
+  // Check if sum is approximately 1.0
+  if (Math.abs(sum - 1.0) < 0.01) {
+    return true;  // Valid
+  }
+
+  // If close (within 5%), auto-normalize
+  if (Math.abs(sum - 1.0) < 0.05) {
+    dist.forEach(d => d.probability /= sum);
+    return true;
+  }
+
+  // Otherwise invalid
+  throw new Error(`Distribution probabilities must sum to 1.0, got ${sum}`);
+}
+
+// Validation schema
+const PersonalityProfileSchema = z.object({
+  mbtiDistribution: z.array(z.object({
+    type: z.enum(['INTJ', 'INTP', ...]),  // All 16 types
+    probability: z.number().min(0).max(1),
+    precision: z.number().min(0).max(1)
+  })).refine(validateDistribution, {
+    message: 'MBTI probabilities must sum to 1.0'
+  }),
+
+  enneagramDistribution: z.array(z.object({
+    type: z.string(),  // "1", "2", ..., "9", "1w2", etc.
+    probability: z.number().min(0).max(1),
+    precision: z.number().min(0).max(1)
+  })).refine(validateDistribution, {
+    message: 'Enneagram probabilities must sum to 1.0'
+  })
+});
+```
+
+**Database Constraint:**
+```sql
+-- Application-level validation (can't easily enforce in SQL)
+-- But add check for individual probabilities
+ALTER TABLE personality_profiles
+  ADD CONSTRAINT check_mbti_distribution
+    CHECK (jsonb_array_length(mbti_distribution) > 0),
+  ADD CONSTRAINT check_enneagram_distribution
+    CHECK (jsonb_array_length(enneagram_distribution) > 0);
+```
 
 ---
 
