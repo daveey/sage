@@ -9,14 +9,38 @@ This document records all decisions made for the personality profiling app. Each
 
 ## Critical Decisions (Must Answer Before Development)
 
-### 1. Initial Personality Assessment
+### 1. Initial Personality Assessment ✅
 **Question:** How should users initially establish their personality profile?
 
-**Decision:** [PENDING]
+**Decision:** Multi-path onboarding with 4 options, ChatGPT archive analysis as recommended default
 
-**Rationale:** [To be filled]
+**Paths Offered:**
+1. **"Analyze my conversations" (RECOMMENDED)** - Upload ChatGPT archive or paste conversations
+2. **"I know my types"** - Manual entry + optional self-description
+3. **"Take conversational assessment"** - LLM-driven adaptive Q&A (5-10 exchanges)
+4. **"Skip for now"** - Start with blank profile, add statements manually
 
-**Implementation Notes:** [To be filled]
+**Rationale:**
+- ChatGPT archive analysis is unique differentiator
+- Real conversational data > questionnaire responses (higher quality)
+- Token budget allows generous LLM usage ($0.50-1.50 per analysis)
+- Serves all user types: informed, new, exploratory, privacy-conscious
+- Fast time-to-value: all paths reach first artifact in <10 minutes
+
+**Implementation Notes:**
+- Max upload size: 50MB for ChatGPT archives
+- Privacy: Delete uploaded conversations immediately after analysis (keep only extracted profile)
+- Analysis prompt: Extract MBTI/Enneagram/Big5 + 25-30 personality statements
+- Conversational assessment: Adaptive LLM-driven Q&A (not traditional questionnaire)
+- All paths can be revisited later from profile page
+- Show privacy notice: "Conversations analyzed and deleted immediately"
+
+**Cost Estimate:**
+- Path 1 (Archive): ~$0.50-1.50 per user
+- Path 2 (Manual): ~$0.10-0.30 per user (statement generation)
+- Path 3 (Conversational): ~$0.30-0.60 per user
+- Path 4 (Skip): $0
+- Average: ~$0.50 per user onboarding (acceptable given no budget constraints)
 
 ---
 
