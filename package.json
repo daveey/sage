@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Personality Profiling App - Full Stack",
   "scripts": {
-    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "postinstall": "cd backend && npm install && cd ../frontend && npm install",
     "build:frontend": "cd frontend && npm run build",
     "build:backend": "cd backend && npm run build",
     "build": "npm run build:frontend && npm run build:backend",
@@ -13,5 +13,9 @@
   },
   "keywords": ["personality", "profiling", "ai", "llm"],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
 }
