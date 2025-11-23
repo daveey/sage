@@ -2,15 +2,33 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import cookieParser from 'cookie-parser';
+import passport from 'passport';
+import { configurePassport } from './passport-config';
+import pool from './db';
+
+// Import routes
+import authRoutes from './routes/auth';
+import profileRoutes from './routes/profile';
+import statementsRoutes from './routes/statements';
+import artifactsRoutes from './routes/artifacts';
 
 dotenv.config();
+
+// Configure Passport
+configurePassport();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
+app.use(passport.initialize());
 
 // API Health check
 app.get('/api/health', (req, res) => {
@@ -26,12 +44,19 @@ app.get('/api/status', (req, res) => {
   res.json({
     message: 'Personality Profiling API v1.0-MVP',
     features: {
-      auth: false,
-      profiles: false,
-      artifacts: false
+      auth: true,
+      profiles: true,
+      statements: true,
+      artifacts: true
     }
   });
 });
+
+// Mount API routes
+app.use('/api/auth', authRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/api/statements', statementsRoutes);
+app.use('/api/artifacts', artifactsRoutes);
 
 // Serve static files from frontend build (production)
 const frontendDist = path.join(__dirname, '../../frontend/dist');
